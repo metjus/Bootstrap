@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="sk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="{{DESCRIPTION}}">
+<meta name="theme-color" content="#173e3d">
+<title>{{TITLE}}</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/style.css?v={{BUILD}}">
+<link rel="stylesheet" href="/redesign.css?v={{BUILD}}">
+<link rel="stylesheet" href="/app.css?v={{BUILD}}">
+</head>
+<body data-page="{{PAGE}}"{{ACTION}}>
+<a class="skip" href="#mainContent">Preskočiť na obsah</a>
+<header><div class="topbar wrap"><a class="brand" href="/" aria-label="Bazaro — domov"><span class="mark">↗</span> bazaro<span class="brand-dot">.</span></a><nav aria-label="Hlavná navigácia"><a class="nav" href="/" data-t="homeNav">Domov</a><a class="nav" href="/kategorie/" data-t="categoriesNav">Kategórie</a><a class="nav" href="/inzeraty/" data-t="listingsNav">Inzeráty</a></nav><div class="header-actions"><a href="/inzeraty/?oblubene=1" id="saved" class="icon-btn" aria-label="Obľúbené inzeráty" title="Obľúbené">♡ <span id="savedCount">0</span></a><a href="/spravy/" class="inbox-link" id="inboxLink" aria-label="Správy" title="Správy" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M20 15a3 3 0 0 1-3 3H9l-5 3V6a3 3 0 0 1 3-3h10a3 3 0 0 1 3 3z"/><path d="M8 8h8M8 12h5"/></svg><span id="inboxBadge" hidden>0</span></a><a href="/prihlasenie/" id="account" class="account" data-t="signin">Prihlásiť sa</a><a href="/registracia/" id="register" class="register-link" data-t="signup">Registrácia</a><a class="primary add" id="add" href="/pridat/" data-t="add">＋ Pridať inzerát</a></div></div></header>
+<main id="mainContent" class="page-enter">
+{{MAIN}}
+</main>
+<footer class="wrap site-footer"><div class="footer-top"><div class="footer-identity"><a class="brand" href="/">bazaro.</a><p data-t="footer">Bazár pre Slovensko a Česko</p></div><div class="footer-column"><h2 data-t="footerExplore">Objavuj</h2><a href="/kategorie/" data-t="categoriesNav">Kategórie</a><a href="/inzeraty/" data-t="allAds">Všetky inzeráty</a><a href="/ucet/" data-t="footerAccount">Môj účet</a><a href="/spravy/" data-t="footerMessages">Správy</a><button class="text-button" id="safety" type="button" data-t="footerSafety">Bezpečné obchodovanie</button></div><div class="footer-column"><h2 data-t="footerRules">Pravidlá a súkromie</h2><a href="/podmienky/" data-t="footerTerms">Podmienky používania</a><a href="/ochrana-udajov/" data-t="footerPrivacy">Ochrana osobných údajov</a><a href="/cookies/" data-t="footerCookies">Cookies</a><button class="text-button" id="cookieSettings" type="button" data-t="footerSettings">Nastavenie cookies</button></div><div class="footer-column"><h2 data-t="footerHelp">Pomoc a kontakt</h2><a href="/pravidla-inzercie/" data-t="footerAds">Pravidlá inzercie</a><a href="/nahlasit/" data-t="footerReport">Nahlásiť obsah</a><a href="/kontakt/" data-t="footerContact">Kontakt a prevádzkovateľ</a></div></div><div class="footer-bottom"><span>© {{YEAR}} Bazaro</span><span data-t="footerNote">Dohoda, platba a odovzdanie prebiehajú priamo medzi používateľmi.</span><div class="footer-language"><span data-t="language">Jazyk</span><button id="language" type="button" class="language" aria-label="Prepnúť jazyk">SK <span>⌄</span></button></div></div></footer>
+<dialog id="modal" aria-labelledby="dialogTitle"><button id="close" type="button" class="close" aria-label="Zavrieť">×</button><div id="modalContent"></div></dialog>
+<div id="toast" role="status" class="toast" hidden></div>
+<section id="cookieBanner" class="cookie-banner" aria-labelledby="cookieBannerTitle" hidden><div class="cookie-banner-copy"><h2 id="cookieBannerTitle">Tvoje súkromie. Tvoja voľba.</h2><p id="cookieBannerCopy"></p></div><div class="cookie-actions"><button id="cookieReject" type="button">Odmietnuť voliteľné</button><button id="cookieAccept" type="button">Prijať voliteľné</button><button id="cookieCustomize" type="button">Nastaviť</button></div></section>
+<noscript><p class="wrap notice">Bazaro potrebuje zapnutý JavaScript.</p></noscript>
+<script src="/bootstrap.js?v={{BUILD}}" data-build="{{BUILD}}" defer></script>
+</body>
+</html>

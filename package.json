@@ -1,0 +1,25 @@
+{
+  "name": "bazaro",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "node scripts/build.mjs && wrangler dev",
+    "deploy": "node scripts/check-config.mjs && node scripts/build.mjs && wrangler deploy",
+    "configure": "node scripts/configure.mjs",
+    "db:local": "wrangler d1 migrations apply bazaro-db --local",
+    "db:remote": "wrangler d1 migrations apply bazaro-db --remote",
+    "test": "node scripts/build.mjs && node --test tests/api.test.mjs tests/routes.test.mjs",
+    "test:runtime": "node scripts/build.mjs && node tests/workers-runtime.cjs",
+    "check": "node scripts/check-config.mjs",
+    "build": "node scripts/build.mjs",
+    "test:e2e": "node scripts/build.mjs && node tests/e2e.cjs"
+  },
+  "devDependencies": {
+    "playwright-core": "1.56.1",
+    "wrangler": "4.92.0"
+  }
+}
