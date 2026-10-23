@@ -26,11 +26,11 @@ window.pageInit = async function () {
     api("listings/featured").catch(() => ({ listings: [] })),
     api("listings?limit=12").catch((e) => ({ error: e.message, listings: [] })),
   ]);
-  if (top.listings.length) {
+  if (top.listings?.length) {
     $("#topStrip").innerHTML = top.listings.map(cardMarkup).join("");
     $("#topSection").hidden = false;
   }
-  $("#latestRows").innerHTML = latest.listings.length
+  $("#latestRows").innerHTML = latest.listings?.length
     ? latest.listings.map(rowMarkup).join("")
     : `<div class="empty"><h3>${latest.error ? esc(latest.error) : "Zatiaľ tu nie je žiadny inzerát"}</h3><p>Buď prvý – pridanie je zadarmo a zaberie minútu.</p><a class="btn btn-tag" href="/pridat/">${icon("plus")}Pridať inzerát</a></div>`;
   await counts;
