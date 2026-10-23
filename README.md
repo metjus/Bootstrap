@@ -1,17 +1,23 @@
 # Bazaro — bazár pre Cloudflare Workers
 
-Kompletný bazár pre Slovensko a Česko: web, používateľské účty, inzeráty s fotografiami, správy a administrácia. Beží ako jeden Cloudflare Worker s databázou D1 a úložiskom fotografií R2. Neobsahuje žiadne demo inzeráty ani ukážkové účty — po nasadení je databáza prázdna.
+Kompletný bazár pre Slovensko: web, používateľské účty, inzeráty s fotografiami, správy a administrácia. Beží ako jeden Cloudflare Worker s databázou D1 a úložiskom fotografií R2. Neobsahuje žiadne demo inzeráty ani ukážkové účty — po nasadení je databáza prázdna.
 
 ## Čo bazár obsahuje
 
 **Web**
 - Úvod so zvýraznenými (Boost) ponukami, alebo najnovšími inzerátmi, ak žiadne zvýraznené nie sú.
-- Kategórie, výpis inzerátov s vyhľadávaním na serveri (bez ohľadu na diakritiku), filtrami (Predám/Kúpim, kategória, cena, stav, mesto/PSČ, okruh v km), zoradením a stránkovaním.
-- Detail inzerátu s galériou, kontaktmi pre prihlásených, obľúbenými, zdieľaním, podobnými ponukami a nahlásením.
+- 19 kategórií s podkategóriami (`server/catalog.mjs`), vlastné adresy kategórií (`/auto/`, `/auto/osobne-auta/`).
+- Výpis inzerátov ako na bazos.sk: riadky s náhľadovou fotkou, vyhľadávanie na serveri (bez ohľadu na diakritiku), filtre (Predám/Kúpim, kategória, podkategória, cena, stav, iba s fotkou, PSČ alebo obec + okruh v km), zoradenie a stránkovanie.
+- Cena: pevná suma, **Zadarmo**, **Dohodou** alebo vlastný text (napr. „Ponúknite“). Inzeráty bez ceny sa pri zoradení podľa ceny radia na koniec.
+- PSČ: každé slovenské PSČ sa priradí k najbližšiemu zo 105 referenčných miest (okresné mestá a väčšie obce), takže okruh 10–20 km funguje bez 50 km nepresnosti. Presné súradnice všetkých PSČ doplníš príkazom `npm run postal` (stiahne otvorené dáta GeoNames).
+- Detail inzerátu s galériou, kontaktmi pre prihlásených, obľúbenými, zdieľaním, **ďalšími inzerátmi predajcu**, podobnými ponukami a nahlásením. Stránka predajcu `/predajca/?id=…` so všetkými jeho aktívnymi inzerátmi.
+- Platnosť inzerátu **60 dní**; 3 dni pred koncom príde email a posledných 7 dní sa dá jedným klikom predĺžiť o ďalších 60 dní.
+- Fotografie sa pri nahratí zmenšia a uloží sa aj náhľad (rýchle výpisy).
+- Ochrana proti spamu Cloudflare Turnstile pri registrácii a pridaní inzerátu (voliteľná).
 - Pridanie inzerátu v 3 krokoch: údaje, 1–8 fotografií s úpravou (otočenie, orez, jas), náhľad. Rozpracovaný inzerát sa ukladá v prehliadači.
 - Správy: rozhovor ku každému inzerátu, neprečítané, vyhľadávanie, priebežné načítanie nových správ, blokovanie, skrytie, emailové upozornenia.
 - Môj účet: moje inzeráty (úprava vrátane fotografií, ukončenie, obnovenie, odstránenie, Boost), obľúbené, nastavenia (profil, zmena emailu s overením, zmena hesla, export údajov, odstránenie účtu).
-- Registrácia s overením emailu, prihlásenie, obnova hesla. Slovenčina a čeština, mobilné rozloženie.
+- Registrácia s overením emailu, prihlásenie, obnova hesla. Iba slovenčina, mobilné rozloženie so spodnou navigáciou.
 - Právne stránky (podmienky, ochrana údajov, cookies, pravidlá inzercie, kontakt, nahlásenie obsahu). Údaje prevádzkovateľa sa dopĺňajú z konfigurácie.
 
 **Administrácia** (`/administracia/`, prístup majú overené účty z `ADMIN_EMAIL`)
@@ -24,7 +30,7 @@ Kompletný bazár pre Slovensko a Česko: web, používateľské účty, inzerá
 
 **Bezpečnosť a prevádzka**
 - Heslá scrypt, HttpOnly/Secure relácie, CSRF a kontrola Origin, limity pokusov, kontrola vlastníctva inzerátov a fotografií, CSP a ďalšie bezpečnostné hlavičky.
-- Denná údržba cez Cron: maže expirované relácie, tokeny, limity a neuložené fotografie.
+- Denná údržba cez Cron: maže expirované relácie, tokeny, limity a neuložené fotografie, posiela upozornenia na končiace inzeráty.
 - robots.txt, sitemap.xml a indexovanie zapínané premennou `PUBLIC_INDEXING`.
 
 ## Čo potrebuješ
@@ -43,16 +49,20 @@ npm install
 npx wrangler login
 npx wrangler d1 create bazaro-db
 npx wrangler r2 bucket create bazaro-photos
-npm run configure          # ID databázy, adresa webu, admin email, odosielateľ, údaje prevádzkovateľa
-npm run db:remote          # vytvorí tabuľky (migrácie 0001 a 0002)
+npm run configure          # ID databázy, názov webu, adresa webu, admin email, odosielateľ, údaje prevádzkovateľa, Turnstile
+npm run db:remote          # vytvorí tabuľky (migrácie 0001–0003)
 npx wrangler secret put RESEND_API_KEY
+npx wrangler secret put TURNSTILE_SECRET   # len ak používaš Turnstile
 npm run deploy
 ```
 
 - `APP_URL` má tvar `https://bazaro.TVOJ-SUBDOMAIN.workers.dev` (bez lomky na konci), neskôr tvoja doména.
+- `SITE_NAME` je názov bazára (logo, titulky, emaily, právne texty). Zmeníš ho kedykoľvek bez úprav kódu.
 - `ADMIN_EMAIL` môže obsahovať viac adries oddelených čiarkou.
 - `MAIL_FROM` napr. `Bazaro <noreply@mail.tvojadomena.sk>` — musí byť z domény overenej v Resend.
 - `npm run deploy` odmietne nasadenie, kým nie je konfigurácia vyplnená.
+- Turnstile (voliteľné): Cloudflare → Turnstile → Add widget, doména tvojho webu, režim Managed. Site key daj do `TURNSTILE_SITE_KEY` vo `wrangler.jsonc`, Secret key cez `npx wrangler secret put TURNSTILE_SECRET`. Bez nich web funguje, len bez tejto ochrany.
+- Presné PSČ (voliteľné): `npm run postal` a potom `npm run deploy`.
 
 ### Overenie po nasadení
 
@@ -62,7 +72,7 @@ npm run deploy
 
 ### Aktualizácia existujúceho nasadenia
 
-Ak už beží staršia verzia, spusti `npm run db:remote` (pridá migráciu `0002_production.sql`, existujúce dáta zostanú) a potom `npm run deploy`. Vyhľadávací index pre staršie inzeráty sa doplní automaticky. Ak máš v databáze testovacie inzeráty, odstráň ich v **Administrácia → Inzeráty**.
+Ak už beží staršia verzia, spusti `npm run db:remote` (pridá chýbajúce migrácie `0002_production.sql` a `0003_catalog.sql`, existujúce dáta zostanú; staré kategórie sa premapujú na nové) a potom `npm run deploy`. Vyhľadávací index pre staršie inzeráty sa doplní automaticky. Ak máš v databáze testovacie inzeráty, odstráň ich v **Administrácia → Inzeráty**.
 
 ## Doména a verejné spustenie
 
@@ -82,12 +92,12 @@ npm run test:e2e       # test v prehliadači (raz: npx playwright-core install c
 ```
 
 Štruktúra:
-- `web/layout.html` — spoločná hlavička a pätička; `web/pages/*.html` — obsah stránok; `web/js/*.js` — klientsky kód; `web/*.css` — štýly.
+- `web/layout.html` — spoločná hlavička a pätička; `web/pages/*.html` — obsah stránok; `web/js/*.js` — klientsky kód; `web/app.css` — dizajn; `web/fonts/` — písma (Bricolage Grotesque, Inter; licencia OFL).
 - `scripts/build.mjs` zloží stránky do `server/pages.mjs` a statické súbory do `public/` (oba sú generované, needituj ich).
-- `server/api.mjs` — API, `server/places.mjs` — mestá pre filter vzdialenosti, `worker.mjs` — vstup Workera, `migrations/` — databáza. Už aplikovanú migráciu nemeň; zmeny patria do novej.
+- `server/api.mjs` — API, `server/catalog.mjs` — kategórie a podkategórie, `server/places.mjs` — PSČ a mestá pre filter vzdialenosti, `server/icons.mjs` — ikony, `worker.mjs` — vstup Workera, `migrations/` — databáza. Už aplikovanú migráciu nemeň; zmeny patria do novej.
 
 ## Známe obmedzenia
 
 - Boost je zatiaľ bezplatný; platobná brána nie je zapojená.
-- Filter vzdialenosti pozná ~100 väčších miest SK/CZ; ostatné obce sa hľadajú podľa názvu.
+- Bez `npm run postal` je poloha inzerátu daná referenčným mestom podľa prvých 3 číslic PSČ (presnosť zvyčajne do ~15 km).
 - Správy sa obnovujú každých pár sekúnd (nie websockety); na notifikačný email sa nedá odpovedať.

@@ -2,6 +2,8 @@
   const build = document.currentScript?.dataset.build || "";
   const modules = {
     home: "home",
+    categories: "home",
+    seller: "seller",
     listings: "listings",
     detail: "detail",
     create: "create",
@@ -26,7 +28,7 @@
       const response = await fetch("/api/bootstrap", { credentials: "same-origin", cache: "no-store" });
       if (!response.ok) throw Error("Server nie je dostupný.");
       window.BAZAR_BOOT = await response.json();
-      for (const name of ["places", "core", modules[document.body.dataset.page]].filter(Boolean)) await load(name);
+      for (const name of ["catalog", "core", modules[document.body.dataset.page]].filter(Boolean)) await load(name);
       await window.startBazaro();
     } catch (e) {
       console.error(e);

@@ -1,10 +1,8 @@
-import { api, media, maintenance } from "./server/api.mjs";
+import { api, media, maintenance, siteName } from "./server/api.mjs";
+import { CATALOG, category, subcategory } from "./server/catalog.mjs";
 import { pages } from "./server/pages.mjs";
 const esc = (s) =>
-  String(s).replace(
-    /[&<>"']/g,
-    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c],
-  );
+  String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const privatePages = new Set([
   "/ucet/",
   "/spravy/",
@@ -16,6 +14,7 @@ const privatePages = new Set([
   "/obnova-hesla/",
   "/zabudnute-heslo/",
 ]);
+const TURNSTILE = "https://challenges.cloudflare.com";
 function secure(response) {
   const r = new Response(response.body, response),
     h = r.headers;
@@ -25,19 +24,20 @@ function secure(response) {
   if ((h.get("Content-Type") || "").includes("text/html")) {
     h.set(
       "Content-Security-Policy",
-      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; connect-src 'self' blob: data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'",
+      `default-src 'self'; script-src 'self' ${TURNSTILE}; frame-src ${TURNSTILE}; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob:; connect-src 'self' blob: data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'`,
     );
     h.set("X-Frame-Options", "DENY");
   }
   h.set("Strict-Transport-Security", "max-age=31536000");
   return r;
 }
-// Operator details come from configuration so legal pages never contain made-up data.
-function operatorValues(env) {
+// Site name and operator details come from configuration, so legal pages never contain made-up data.
+function configValues(env) {
   const missing = '<span class="legal-missing">údaj doplní prevádzkovateľ v konfigurácii</span>';
   const value = (v) => (String(v || "").trim() ? esc(String(v).trim()) : missing);
   const email = String(env.CONTACT_EMAIL || "").trim();
   return {
+    "{{SITE_NAME}}": esc(siteName(env)),
     "{{OPERATOR_NAME}}": value(env.OPERATOR_NAME),
     "{{OPERATOR_ADDRESS}}": value(env.OPERATOR_ADDRESS),
     "{{OPERATOR_ID}}": value(env.OPERATOR_ID || "—"),
@@ -46,11 +46,24 @@ function operatorValues(env) {
     "{{YEAR}}": String(new Date().getFullYear()),
   };
 }
+const fill = (html, env) => {
+  for (const [k, v] of Object.entries(configValues(env))) html = html.replaceAll(k, v);
+  return html;
+};
+// /auto/ and /auto/osobne-auta/ are category pages rendered by the listings page.
+function categoryRoute(path) {
+  const m = path.match(/^\/([a-z]+)\/(?:([a-z0-9-]+)\/)?$/);
+  const c = m && category(m[1]);
+  if (!c) return null;
+  if (m[2] && !subcategory(c.slug, m[2])) return null;
+  return { cat: c, sub: m[2] ? subcategory(c.slug, m[2]) : null };
+}
 export async function handle(request, env, ctx = { waitUntil() {} }) {
   const url = new URL(request.url),
     path = url.pathname,
     canonicalPath = path.endsWith("/") ? path : path + "/",
-    indexing = env.PUBLIC_INDEXING === "true";
+    indexing = env.PUBLIC_INDEXING === "true",
+    site = siteName(env);
   // Platform identity headers must never authorize a user on a standalone deployment.
   const headers = new Headers(request.headers);
   headers.delete("oai-authenticated-user-id");
@@ -68,25 +81,36 @@ export async function handle(request, env, ctx = { waitUntil() {} }) {
       headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
     });
   }
-  let html = path.startsWith("/") ? pages[path] || pages[canonicalPath] : null;
+  const route = categoryRoute(canonicalPath);
+  if (route && path !== canonicalPath) return Response.redirect(url.origin + canonicalPath + url.search, 301);
+  let html = route ? pages["/inzeraty/"] : path.startsWith("/") ? pages[path] || pages[canonicalPath] : null;
   if (html) {
     let noindex = !indexing || privatePages.has(canonicalPath),
       meta = "";
-    for (const [k, v] of Object.entries(operatorValues(env))) html = html.replaceAll(k, v);
-    if (canonicalPath === "/inzerat/") {
+    html = fill(html, env);
+    if (route) {
+      const name = route.sub ? `${route.sub.name} — ${route.cat.name}` : route.cat.name;
+      html = html
+        .replace(/<title>.*?<\/title>/, `<title>${esc(name)} — bazár ${esc(site)}</title>`)
+        .replace(
+          /<meta name="description" content="[^"]*">/,
+          `<meta name="description" content="${esc(`${name}: inzeráty z celého Slovenska. Predaj a kúp z druhej ruky na ${site}.`)}">`,
+        );
+      meta = `<link rel="canonical" href="${esc(url.origin + canonicalPath)}">`;
+    } else if (canonicalPath === "/inzerat/") {
       const id = Number(url.searchParams.get("id"));
       const listing =
         Number.isSafeInteger(id) && id > 0 && env.DB
           ? await env.DB.prepare(
-              "SELECT l.title,l.description,l.photos FROM listings l JOIN users u ON u.id=l.owner WHERE l.id=? AND l.status IN ('active','sold') AND u.banned=0",
+              "SELECT l.title,l.description,l.photos FROM listings l JOIN users u ON u.id=l.owner WHERE l.id=? AND (l.status='sold' OR (l.status='active' AND l.expires>?)) AND u.banned=0",
             )
-              .bind(id)
+              .bind(id, Date.now())
               .first()
           : null;
       if (listing) {
         const photo = JSON.parse(listing.photos || "[]")[0];
         html = html
-          .replace(/<title>.*?<\/title>/, `<title>${esc(listing.title)} — Bazaro</title>`)
+          .replace(/<title>.*?<\/title>/, `<title>${esc(listing.title)} — ${esc(site)}</title>`)
           .replace(
             /<meta name="description" content="[^"]*">/,
             `<meta name="description" content="${esc(listing.description.slice(0, 160))}">`,
@@ -96,8 +120,12 @@ export async function handle(request, env, ctx = { waitUntil() {} }) {
           `<meta property="og:title" content="${esc(listing.title)}"><meta property="og:type" content="product">` +
           (photo ? `<meta property="og:image" content="${esc(url.origin + "/media/" + photo)}">` : "");
       } else noindex = true;
-    } else meta = `<link rel="canonical" href="${esc(url.origin + canonicalPath)}">`;
-    html = html.replace("</head>", meta + (noindex ? '<meta name="robots" content="noindex, nofollow">' : "") + "</head>");
+    } else if (canonicalPath === "/predajca/") noindex = true;
+    else meta = `<link rel="canonical" href="${esc(url.origin + canonicalPath)}">`;
+    html = html.replace(
+      "</head>",
+      meta + (noindex ? '<meta name="robots" content="noindex, nofollow">' : "") + "</head>",
+    );
     const response = new Response(request.method === "HEAD" ? null : html, {
       headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
     });
@@ -107,15 +135,21 @@ export async function handle(request, env, ctx = { waitUntil() {} }) {
   if (path === "/sitemap.xml") {
     if (!indexing) return new Response("Indexing disabled", { status: 404 });
     const locations = Object.keys(pages)
-      .filter((p) => p.startsWith("/") && !privatePages.has(p) && p !== "/inzerat/" && p !== "/nahlasit/")
+      .filter(
+        (p) => p.startsWith("/") && !privatePages.has(p) && !["/inzerat/", "/nahlasit/", "/predajca/"].includes(p),
+      )
       .map((p) => url.origin + p);
+    for (const c of CATALOG) {
+      locations.push(`${url.origin}/${c.slug}/`);
+      for (const s of c.subs) locations.push(`${url.origin}/${c.slug}/${s.slug}/`);
+    }
     if (env.DB) {
       let last = 0;
       for (;;) {
         const { results } = await env.DB.prepare(
-          "SELECT id FROM listings WHERE status='active' AND id>? ORDER BY id LIMIT 1000",
+          "SELECT id FROM listings WHERE status='active' AND expires>? AND id>? ORDER BY id LIMIT 1000",
         )
-          .bind(last)
+          .bind(Date.now(), last)
           .all();
         for (const r of results) locations.push(url.origin + "/inzerat/?id=" + r.id);
         if (results.length < 1000 || locations.length >= 49000) break;
@@ -133,7 +167,7 @@ export async function handle(request, env, ctx = { waitUntil() {} }) {
   const asset = await env.ASSETS.fetch(request);
   if (asset.status === 404 && pages.__404)
     return secure(
-      new Response(request.method === "HEAD" ? null : pages.__404.replaceAll("{{YEAR}}", String(new Date().getFullYear())), {
+      new Response(request.method === "HEAD" ? null : fill(pages.__404, env), {
         status: 404,
         headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "X-Robots-Tag": "noindex" },
       }),

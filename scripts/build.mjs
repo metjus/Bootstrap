@@ -3,24 +3,39 @@ import { readdirSync, readFileSync, mkdirSync, copyFileSync, writeFileSync, rmSy
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { PLACES } from "../server/places.mjs";
+import { CATALOG } from "../server/catalog.mjs";
+import { ICONS, icon, LOGO_MARK } from "../server/icons.mjs";
 
 const routes = [
   // [route, partial, data-page, title, description, data-action]
-  ["/", "home", "home", "Bazaro — bazár pre Slovensko a Česko", "Predaj, čo nepoužívaš, a nájdi dobré veci vo svojom okolí. Pridanie inzerátu je zadarmo."],
-  ["/kategorie/", "categories", "categories", "Kategórie — Bazaro", "Všetky kategórie inzerátov na Bazaro."],
-  ["/inzeraty/", "listings", "listings", "Inzeráty — Bazaro", "Ponuky a dopyty z celého Slovenska a Česka."],
-  ["/inzerat/", "detail", "detail", "Inzerát — Bazaro", "Inzerát na Bazaro."],
+  [
+    "/",
+    "home",
+    "home",
+    "{{SITE_NAME}} — bazár pre celé Slovensko",
+    "Inzeráty z celého Slovenska: autá, reality, elektronika, nábytok a všetko z druhej ruky. Pridanie inzerátu je zadarmo.",
+  ],
+  ["/kategorie/", "categories", "categories", "Kategórie — Bazaro", "Všetky kategórie inzerátov na {{SITE_NAME}}."],
+  ["/inzeraty/", "listings", "listings", "Inzeráty — Bazaro", "Ponuky a dopyty z celého Slovenska."],
+  ["/inzerat/", "detail", "detail", "Inzerát — Bazaro", "Inzerát na {{SITE_NAME}}."],
+  ["/predajca/", "seller", "seller", "Inzeráty predajcu — Bazaro", "Všetky aktívne inzeráty predajcu."],
   ["/pridat/", "create", "create", "Pridať inzerát — Bazaro", "Pridaj inzerát zadarmo."],
   ["/ucet/", "account", "account", "Môj účet — Bazaro", "Správa účtu a inzerátov."],
   ["/spravy/", "inbox", "inbox", "Správy — Bazaro", "Rozhovory k inzerátom."],
   ["/administracia/", "admin", "admin", "Administrácia — Bazaro", "Administrácia bazára."],
-  ["/prihlasenie/", "auth", "signin", "Prihlásenie — Bazaro", "Prihlásenie do účtu Bazaro."],
-  ["/registracia/", "auth", "signup", "Registrácia — Bazaro", "Vytvor si účet na Bazaro."],
+  ["/prihlasenie/", "auth", "signin", "Prihlásenie — Bazaro", "Prihlásenie do účtu {{SITE_NAME}}."],
+  ["/registracia/", "auth", "signup", "Registrácia — Bazaro", "Vytvor si účet na {{SITE_NAME}}."],
   ["/overenie/", "auth", "auth-action", "Overenie emailu — Bazaro", "Overenie emailovej adresy.", "verify"],
   ["/zabudnute-heslo/", "auth", "auth-action", "Zabudnuté heslo — Bazaro", "Obnova prístupu k účtu.", "forgot"],
   ["/obnova-hesla/", "auth", "auth-action", "Nové heslo — Bazaro", "Nastavenie nového hesla.", "reset"],
-  ["/podmienky/", "terms", "legal", "Podmienky používania — Bazaro", "Podmienky používania služby Bazaro."],
-  ["/ochrana-udajov/", "privacy", "legal", "Ochrana osobných údajov — Bazaro", "Informácie o spracúvaní osobných údajov."],
+  ["/podmienky/", "terms", "legal", "Podmienky používania — Bazaro", "Podmienky používania služby {{SITE_NAME}}."],
+  [
+    "/ochrana-udajov/",
+    "privacy",
+    "legal",
+    "Ochrana osobných údajov — Bazaro",
+    "Informácie o spracúvaní osobných údajov.",
+  ],
   ["/cookies/", "cookies", "legal", "Cookies — Bazaro", "Cookies a ukladanie v prehliadači."],
   ["/pravidla-inzercie/", "rules", "legal", "Pravidlá inzercie — Bazaro", "Čo môže a nemôže obsahovať inzerát."],
   ["/kontakt/", "contact", "legal", "Kontakt a prevádzkovateľ — Bazaro", "Kontaktné údaje prevádzkovateľa."],
@@ -57,9 +72,19 @@ for (const e of readdirSync("web", { withFileTypes: true }))
       copyFileSync(path.join("web", e.name), path.join("public", e.name));
     }
   }
-const places = "window.BAZARO_PLACES=" + JSON.stringify(PLACES) + ";\n";
-writeFileSync("public/places.js", places);
+const places =
+  "window.BAZARO_PLACES=" +
+  JSON.stringify(PLACES.map((p) => [p.name, p.zip])) +
+  ";window.CATALOG=" +
+  JSON.stringify(CATALOG) +
+  ";window.ICONS=" +
+  JSON.stringify(ICONS) +
+  ";\n";
+writeFileSync("public/catalog.js", places);
 hash.update(places);
+const catbar = CATALOG.map(
+  (c) => `<a href="/${c.slug}/" data-cat="${c.slug}">${icon(c.slug)}<span>${c.name}</span></a>`,
+).join("");
 const layout = readFileSync("web/layout.html", "utf8");
 hash.update(layout);
 const pages = {},
@@ -75,6 +100,10 @@ for (const [route, partial, page, title, description, action] of routes)
     .replaceAll("{{ACTION}}", action ? ` data-action="${action}"` : "")
     .replaceAll("{{TITLE}}", attr(title))
     .replaceAll("{{DESCRIPTION}}", attr(description))
-    .replaceAll("{{BUILD}}", build);
+    .replaceAll("{{BUILD}}", build)
+    .replace("{{CATBAR}}", catbar)
+    .replaceAll("{{LOGO}}", LOGO_MARK)
+    .replace(/\{\{ICON:([a-z]+)\}\}/g, (_, name) => icon(name))
+    .replaceAll(" — Bazaro", " — {{SITE_NAME}}");
 writeFileSync("server/pages.mjs", "export const pages = " + JSON.stringify(pages) + ";\n");
 console.log(`Build ${build}: ${routes.length} stránok, statické súbory v public/.`);

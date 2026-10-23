@@ -1,7 +1,8 @@
 import { randomBytes, randomUUID, createHash, scryptSync, timingSafeEqual } from "node:crypto";
-import { fold, resolvePlace, placesWithin } from "./places.mjs";
+import { fold, locate, resolveOrigin, radiusBounds, normalizeZip } from "./places.mjs";
+import { CATALOG, category as findCategory, subcategory as findSubcategory, PRICE_TYPES } from "./catalog.mjs";
 
-export const VERSION = "1.0.0";
+export const VERSION = "1.1.0";
 const uid = () => randomUUID(),
   nid = () => Number.parseInt(randomBytes(6).toString("hex"), 16),
   secret = () => randomBytes(32).toString("hex"),
@@ -18,26 +19,10 @@ export function checkPassword(p, stored) {
     return false;
   }
 }
-export const CATEGORIES = [
-  "Elektronika",
-  "Mobily",
-  "Počítače",
-  "Auto-moto",
-  "Bývanie",
-  "Nehnuteľnosti",
-  "Šport",
-  "Oblečenie",
-  "Deti",
-  "Zvieratá",
-  "Záhrada",
-  "Stroje",
-  "Hudba",
-  "Knihy",
-  "Služby",
-  "Ostatné",
-];
 const CONDITIONS = ["Nové", "Používané"];
 const DAY = 86400000;
+export const LISTING_DAYS = 60;
+const RENEW_WINDOW = 7 * DAY;
 export const cookieName = "__Host-bazar_session";
 const DUMMY_HASH =
   "dummy:00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
@@ -57,6 +42,7 @@ const emailValid = (v) =>
   !v.split("@")[0].includes("..");
 const passwordValid = (p) => typeof p === "string" && p.length >= 12 && p.length <= 128;
 const phoneValid = (p) => !p || /^[+\d ()-]{5,30}$/.test(p);
+export const siteName = (env) => String(env.SITE_NAME || "").trim() || "Bazaro";
 const json = (data, status = 200, headers = {}) =>
   new Response(JSON.stringify(data), {
     status,
@@ -116,7 +102,7 @@ export const adminEmails = (env) =>
     .filter(Boolean);
 export const isAdminUser = (env, u) => !!(u?.verified && !u.banned && adminEmails(env).includes(u.email.toLowerCase()));
 const mailReady = (env) => !!(env.RESEND_API_KEY && env.MAIL_FROM && env.APP_URL);
-async function sendMail(env, to, subject, body, services) {
+async function sendMail(env, to, subject, body, services = {}) {
   if (!mailReady(env)) fail(503, "Odosielanie emailov ešte nie je nakonfigurované.");
   const f = services.mail || fetch;
   let r;
@@ -131,10 +117,33 @@ async function sendMail(env, to, subject, body, services) {
   }
   if (!r.ok) fail(502, "Email sa nepodarilo odoslať. Skús to neskôr.");
 }
-const searchText = (f) => fold([f.title, f.description, f.category, f.city].join(" "));
+// Cloudflare Turnstile bot check; disabled until TURNSTILE_SECRET is configured.
+async function verifyHuman(env, token, ip, services) {
+  if (!env.TURNSTILE_SECRET) return;
+  if (typeof token !== "string" || !token) fail(400, "Potvrď, že nie si robot.");
+  const f = services.turnstile || fetch;
+  let ok = false;
+  try {
+    const r = await f("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ secret: env.TURNSTILE_SECRET, response: token.slice(0, 2048), remoteip: ip }),
+    });
+    ok = (await r.json()).success === true;
+  } catch {
+    fail(502, "Overenie sa nepodarilo. Skús to znova.");
+  }
+  if (!ok) fail(400, "Overenie, že nie si robot, zlyhalo. Skús to znova.");
+}
+const subName = (cat, sub) => findSubcategory(cat, sub)?.name || "Ostatné";
+const searchText = (f) =>
+  fold([f.title, f.description, findCategory(f.category)?.name, subName(f.category, f.subcategory), f.city].join(" "));
 const listingSelect =
   "SELECT l.*,u.name seller,u.email owner_email,u.banned owner_banned,u.created owner_created FROM listings l JOIN users u ON u.id=l.owner";
+const withColumns = (extra) => listingSelect.replace(" FROM", "," + extra + " FROM");
 const viewCount = "(SELECT count(*) FROM listing_views v WHERE v.listing_id=l.id) view_count";
+const photoThumbs = "(SELECT group_concat(x.id) FROM uploads x WHERE x.listing_id=l.id AND x.thumb=1) thumb_ids";
+const PUBLIC = "l.status='active' AND l.expires>? AND u.banned=0";
 function paging(params, size = 24, max = 60) {
   const limit = Math.min(max, Math.max(1, Number(params.get("limit")) || size)),
     page = Math.max(1, Math.min(10000, Math.floor(Number(params.get("page")) || 1)));
@@ -146,7 +155,8 @@ const pageResult = (key, rows, total, { limit, page }) => ({
   page,
   pages: Math.max(1, Math.ceil(total / limit)),
 });
-let searchIndexComplete = false;
+let searchIndexComplete = false,
+  countsCache = null;
 
 export async function api(request, env, services = {}) {
   const DB = env.DB,
@@ -154,7 +164,8 @@ export async function api(request, env, services = {}) {
     url = new URL(request.url),
     path = url.pathname.replace(/^\/api\/?/, "").replace(/\/$/, ""),
     method = request.method,
-    now = Date.now();
+    now = Date.now(),
+    site = siteName(env);
   const stmt = (q, ...a) => DB.prepare(q).bind(...a),
     first = (q, ...a) => stmt(q, ...a).first(),
     all = async (q, ...a) => (await stmt(q, ...a).all()).results,
@@ -202,21 +213,21 @@ export async function api(request, env, services = {}) {
     );
     const copy = {
       verify: [
-        "Overenie emailu — Bazaro",
+        `Overenie emailu — ${site}`,
         "Potvrď svoju emailovú adresu",
         "overenie",
         "24 hodín",
-        "Ak si sa na Bazaro neregistroval, ignoruj tento email.",
+        `Ak si sa na ${site} neregistroval, ignoruj tento email.`,
       ],
       email: [
-        "Potvrdenie novej emailovej adresy — Bazaro",
+        `Potvrdenie novej emailovej adresy — ${site}`,
         "Potvrď novú emailovú adresu svojho účtu",
         "overenie",
         "24 hodín",
         "Ak si o zmenu nežiadal, ignoruj tento email.",
       ],
       reset: [
-        "Obnova hesla — Bazaro",
+        `Obnova hesla — ${site}`,
         "Nastav si nové heslo",
         "obnova-hesla",
         "1 hodinu",
@@ -251,39 +262,54 @@ export async function api(request, env, services = {}) {
       : null;
   function listingDTO(d) {
     const ids = JSON.parse(d.photos || "[]"),
+      thumbs = new Set(String(d.thumb_ids || "").split(",")),
       mine = !!user && d.owner === user.id,
-      photos = ids.map((id) => "/media/" + id);
+      photos = ids.map((id) => "/media/" + id),
+      expired = d.status === "active" && d.expires <= now;
     const out = {
       id: d.id,
       title: d.title,
       desc: d.description,
       cat: d.category,
+      sub: d.subcategory,
+      catName: findCategory(d.category)?.name || "Ostatné",
+      subName: subName(d.category, d.subcategory),
       price: d.price / 100,
-      country: d.country,
+      priceType: d.price_type,
       city: d.city,
+      zip: d.zip,
       state: d.condition,
       buy: !!d.buy,
       seller: d.seller,
+      sellerId: d.owner,
       sellerSince: d.owner_created,
-      status: d.status,
-      boost: d.status === "active" && d.boost_until > now,
+      status: expired ? "expired" : d.status,
+      boost: d.status === "active" && !expired && d.boost_until > now,
       boostUntil: d.boost_until,
       createdAt: d.created,
       updatedAt: d.updated || d.created,
+      expires: d.expires,
       photos: photos.length ? photos : ["/assets/wanted.svg"],
       photo: photos[0] || "/assets/wanted.svg",
+      thumb: ids.length ? "/media/" + ids[0] + (thumbs.has(ids[0]) ? "?t=1" : "") : "/assets/wanted.svg",
       photoCount: photos.length,
       noPhoto: !photos.length,
       hasPhone: !!d.phone,
-      ownerId: d.owner,
       mine,
     };
     if (d.view_count !== undefined) out.viewCount = d.view_count;
-    if (mine) Object.assign(out, { phone: d.phone, uploadIds: ids, moderationNote: d.moderation_note || "" });
+    if (mine)
+      Object.assign(out, {
+        phone: d.phone,
+        uploadIds: ids,
+        moderationNote: d.moderation_note || "",
+        renewable: ["active", "sold"].includes(d.status) && d.expires - now < RENEW_WINDOW,
+      });
     return out;
   }
   const listingRow = (id) =>
-    first(`${listingSelect.replace("FROM", "," + viewCount + " FROM")} WHERE l.id=? AND l.status<>'deleted'`, id);
+    first(`${withColumns(viewCount + "," + photoThumbs)} WHERE l.id=? AND l.status<>'deleted'`, id);
+  const isPublic = (d) => !d.owner_banned && (d.status === "sold" || (d.status === "active" && d.expires > now));
   const blocked = (a, b) =>
     first("SELECT 1 FROM blocks WHERE (user_id=? AND peer=?) OR (user_id=? AND peer=?)", a, b, b, a);
   async function conversation(id) {
@@ -301,34 +327,40 @@ export async function api(request, env, services = {}) {
     const title = text(b.title, 140),
       description = text(b.desc ?? b.description, 10000),
       city = text(b.city, 100),
+      zip = normalizeZip(b.zip),
       phone = text(b.phone, 30),
       category = b.cat ?? b.category,
+      sub = b.sub ?? b.subcategory,
       condition = b.state ?? b.condition,
-      price = Number(b.price);
+      priceType = PRICE_TYPES.includes(b.priceType) ? b.priceType : "fixed",
+      price = priceType === "fixed" ? Number(b.price) : 0;
+    if (title.length < 5 || description.length < 15)
+      fail(400, "Názov musí mať aspoň 5 znakov a popis aspoň 15 znakov.");
+    if (!findCategory(category) || !findSubcategory(category, sub)) fail(400, "Vyber kategóriu a podkategóriu.");
+    if (!CONDITIONS.includes(condition)) fail(400, "Vyber stav predmetu.");
     if (
-      title.length < 5 ||
-      description.length < 15 ||
-      city.length < 2 ||
-      !CATEGORIES.includes(category) ||
-      !CONDITIONS.includes(condition) ||
-      b.price === "" ||
-      b.price === null ||
-      !Number.isFinite(price) ||
-      price < 0 ||
-      price > 100000000 ||
-      !["sk", "cz"].includes(b.country)
+      priceType === "fixed" &&
+      (b.price === "" || b.price === null || !Number.isFinite(price) || price <= 0 || price > 100000000)
     )
-      fail(400, "Skontroluj názov, popis, kategóriu, miesto, krajinu a cenu.");
+      fail(400, "Zadaj cenu väčšiu ako 0 € alebo vyber Zadarmo, Dohodou či V texte.");
+    if (!zip) fail(400, "Zadaj platné PSČ (5 číslic).");
+    if (city.length < 2) fail(400, "Zadaj obec.");
+    const place = locate(zip, city);
+    if (!place) fail(400, "PSČ nepoznáme. Skontroluj ho, prosím.");
     if (!phoneValid(phone)) fail(400, "Neplatný telefón.");
     const f = {
       title,
       description,
       category,
+      subcategory: sub,
       condition,
+      priceType,
       price: Math.round(price * 100),
       city,
+      zip,
+      lat: place.lat,
+      lon: place.lon,
       phone,
-      country: b.country,
       buy: !!b.buy,
     };
     return { ...f, search: searchText(f), cityKey: fold(city) };
@@ -348,6 +380,7 @@ export async function api(request, env, services = {}) {
     for (const photo of ids) {
       await run("DELETE FROM uploads WHERE id=?", photo);
       await BUCKET.delete(photo);
+      await BUCKET.delete("t/" + photo);
     }
   }
   async function removeListing(d) {
@@ -356,6 +389,7 @@ export async function api(request, env, services = {}) {
       stmt("DELETE FROM favorites WHERE listing_id=?", d.id),
     ]);
     await deletePhotos(JSON.parse(d.photos || "[]"));
+    countsCache = null;
   }
   async function purgeUser(id) {
     const files = await all("SELECT id FROM uploads WHERE owner=?", id);
@@ -376,7 +410,11 @@ export async function api(request, env, services = {}) {
         id,
       ),
     ]);
-    for (const f of files) await BUCKET.delete(f.id);
+    for (const f of files) {
+      await BUCKET.delete(f.id);
+      await BUCKET.delete("t/" + f.id);
+    }
+    countsCache = null;
   }
   async function audit(action, target, note = "") {
     await run(
@@ -396,11 +434,21 @@ export async function api(request, env, services = {}) {
   async function ensureSearchIndex() {
     if (searchIndexComplete) return;
     const rows = await all(
-      "SELECT id,title,description,category,city FROM listings WHERE search='' AND status<>'deleted' LIMIT 200",
+      "SELECT id,title,description,category,subcategory,city,zip FROM listings WHERE search='' AND status<>'deleted' LIMIT 200",
     );
     if (rows.length)
       await DB.batch(
-        rows.map((r) => stmt("UPDATE listings SET search=?,city_key=? WHERE id=?", searchText(r), fold(r.city), r.id)),
+        rows.map((r) => {
+          const place = locate(r.zip, r.city);
+          return stmt(
+            "UPDATE listings SET search=?,city_key=?,lat=coalesce(lat,?),lon=coalesce(lon,?) WHERE id=?",
+            searchText(r),
+            fold(r.city),
+            place?.lat ?? null,
+            place?.lon ?? null,
+            r.id,
+          );
+        }),
       );
     if (rows.length < 200) searchIndexComplete = true;
   }
@@ -447,6 +495,7 @@ export async function api(request, env, services = {}) {
         storage: !!BUCKET,
         email: mailReady(env),
         admin: adminEmails(env).length > 0,
+        antispam: !!env.TURNSTILE_SECRET,
         version: VERSION,
       });
     }
@@ -457,8 +506,40 @@ export async function api(request, env, services = {}) {
         csrf: user ? session.csrf : null,
         favorites: fav.map((x) => x.listing_id),
         unread: await unreadCount(),
-        config: { email: mailReady(env), admin: admin() },
+        config: {
+          email: mailReady(env),
+          admin: admin(),
+          site,
+          turnstile: env.TURNSTILE_SECRET && env.TURNSTILE_SITE_KEY ? env.TURNSTILE_SITE_KEY : "",
+          listingDays: LISTING_DAYS,
+        },
       });
+    }
+    if (path === "places" && method === "GET") {
+      const zip = normalizeZip(url.searchParams.get("zip")),
+        place = locate(zip, text(url.searchParams.get("city"), 100));
+      if (!place) fail(404, "PSČ nepoznáme.");
+      return json({ area: place.area, exact: !!place.exact }, 200, { "Cache-Control": "public, max-age=86400" });
+    }
+    if (path === "categories" && method === "GET") {
+      if (!countsCache || countsCache.at < now - 60000) {
+        const rows = await all(
+          `SELECT l.category c,l.subcategory s,count(*) n FROM listings l JOIN users u ON u.id=l.owner WHERE ${PUBLIC} GROUP BY l.category,l.subcategory`,
+          now,
+        );
+        const total = (
+            await first(`SELECT count(*) n FROM listings l JOIN users u ON u.id=l.owner WHERE ${PUBLIC}`, now)
+          ).n,
+          today = (
+            await first(
+              `SELECT count(*) n FROM listings l JOIN users u ON u.id=l.owner WHERE ${PUBLIC} AND l.created>?`,
+              now,
+              now - DAY,
+            )
+          ).n;
+        countsCache = { at: now, value: { counts: rows, total, today } };
+      }
+      return json(countsCache.value, 200, { "Cache-Control": "public, max-age=60" });
     }
 
     // ---- Authentication -----------------------------------------------------
@@ -477,6 +558,7 @@ export async function api(request, env, services = {}) {
       await limit("register", ip, 8);
       await limit("email", email, 5);
       if (!mailReady(env)) fail(503, "Registráciu spustíme po nastavení odosielania overovacích emailov.");
+      await verifyHuman(env, b.captcha, ip, services);
       let u = await first("SELECT * FROM users WHERE email=?", email);
       if (!u) {
         u = { id: uid(), email, name };
@@ -562,6 +644,7 @@ export async function api(request, env, services = {}) {
       await limit("forgot", ip, 8);
       await limit("email", email, 5);
       if (!mailReady(env)) fail(503, "Odosielanie emailov ešte nie je nastavené.");
+      await verifyHuman(env, b.captcha, ip, services);
       const u = await first("SELECT * FROM users WHERE email=? AND deleted=0 AND banned=0", email);
       if (u) await tokenMail(u, "reset");
       return json({ message: "Ak účet existuje, poslali sme email na obnovu hesla." }, 202);
@@ -650,21 +733,24 @@ export async function api(request, env, services = {}) {
             title: l.title,
             description: l.description,
             category: l.category,
+            subcategory: l.subcategory,
             price: l.price / 100,
-            country: l.country,
+            priceType: l.price_type,
+            zip: l.zip,
             city: l.city,
             condition: l.condition,
             buy: !!l.buy,
             phone: l.phone,
             status: l.status,
             created: l.created,
+            expires: l.expires,
           })),
           favorites: favorites.map((f) => f.listing_id),
           sentMessages: messages,
           blockedAccounts: blocks.length,
         },
         200,
-        { "Content-Disposition": 'attachment; filename="bazaro-moje-udaje.json"' },
+        { "Content-Disposition": 'attachment; filename="moje-udaje.json"' },
       );
     }
     if (path === "account" && method === "DELETE") {
@@ -682,46 +768,67 @@ export async function api(request, env, services = {}) {
       need(false);
       const p = paging(url.searchParams, 20, 50),
         status = url.searchParams.get("status");
-      const filter = ["active", "sold", "hidden"].includes(status) ? status : null;
-      const counts = Object.fromEntries(
-        (
-          await all(
-            "SELECT status,count(*) n FROM listings WHERE owner=? AND status<>'deleted' GROUP BY status",
-            user.id,
-          )
-        ).map((r) => [r.status, r.n]),
+      const statusSql = {
+        active: " AND l.status='active' AND l.expires>?",
+        expired: " AND l.status='active' AND l.expires<=?",
+        sold: " AND l.status='sold'",
+        hidden: " AND l.status='hidden'",
+      }[status];
+      const counts = await first(
+        `SELECT sum(status='active' AND expires>?) active,sum(status='active' AND expires<=?) expired,sum(status='sold') sold,sum(status='hidden') hidden FROM listings WHERE owner=? AND status<>'deleted'`,
+        now,
+        now,
+        user.id,
       );
-      const where = "l.owner=? AND l.status<>'deleted'" + (filter ? " AND l.status=?" : "");
-      const args = filter ? [user.id, filter] : [user.id];
+      const where = "l.owner=? AND l.status<>'deleted'" + (statusSql || "");
+      const args = statusSql?.includes("?") ? [user.id, now] : [user.id];
       const total = (await first(`SELECT count(*) n FROM listings l WHERE ${where}`, ...args)).n;
       const rows = await all(
-        `${listingSelect.replace("FROM", "," + viewCount + " FROM")} WHERE ${where} ORDER BY l.created DESC LIMIT ? OFFSET ?`,
+        `${withColumns(viewCount + "," + photoThumbs)} WHERE ${where} ORDER BY l.created DESC LIMIT ? OFFSET ?`,
         ...args,
         p.limit,
         p.offset,
       );
-      return json({ ...pageResult("listings", rows.map(listingDTO), total, p), counts });
+      return json({
+        ...pageResult("listings", rows.map(listingDTO), total, p),
+        counts: Object.fromEntries(Object.entries(counts).map(([k, v]) => [k, v || 0])),
+      });
     }
     if (path === "me/favorites" && method === "GET") {
       need(false);
       const p = paging(url.searchParams, 24, 60);
       const where =
         "l.id IN (SELECT listing_id FROM favorites WHERE user_id=?) AND l.status IN ('active','sold') AND u.banned=0";
-      const total = (await first(`SELECT count(*) n FROM listings l JOIN users u ON u.id=l.owner WHERE ${where}`, user.id))
-        .n;
+      const total = (
+        await first(`SELECT count(*) n FROM listings l JOIN users u ON u.id=l.owner WHERE ${where}`, user.id)
+      ).n;
       const rows = await all(
-        `${listingSelect} WHERE ${where} ORDER BY l.status='active' DESC,l.created DESC LIMIT ? OFFSET ?`,
+        `${withColumns(photoThumbs)} WHERE ${where} ORDER BY (l.status='active' AND l.expires>?) DESC,l.created DESC LIMIT ? OFFSET ?`,
         user.id,
+        now,
         p.limit,
         p.offset,
       );
       return json(pageResult("listings", rows.map(listingDTO), total, p));
     }
+    const sm = path.match(/^sellers\/([\w-]{1,64})$/);
+    if (sm && method === "GET") {
+      const s = await first("SELECT id,name,created FROM users WHERE id=? AND deleted=0 AND banned=0", sm[1]);
+      if (!s) fail(404, "Predajca sa nenašiel.");
+      const n = (
+        await first(
+          `SELECT count(*) n FROM listings l JOIN users u ON u.id=l.owner WHERE ${PUBLIC} AND l.owner=?`,
+          now,
+          s.id,
+        )
+      ).n;
+      return json({ seller: { id: s.id, name: s.name, since: s.created, active: n } });
+    }
 
     // ---- Photos -------------------------------------------------------------
     if (path === "uploads" && method === "POST") {
       need();
-      await limit("upload", user.id, 60);
+      await limit("upload", user.id, 120);
       const stale = await all(
         "SELECT id FROM uploads WHERE owner=? AND listing_id IS NULL AND created<? LIMIT 40",
         user.id,
@@ -731,13 +838,8 @@ export async function api(request, env, services = {}) {
       const count = await first("SELECT count(*) n FROM uploads WHERE owner=? AND listing_id IS NULL", user.id);
       if (count.n >= 40) fail(400, "Najprv dokonči alebo vymaž rozpracované fotografie.");
       const bytes = await boundedBody(request, 10 * 1024 * 1024);
-      const mime = request.headers.get("content-type")?.split(";")[0],
-        sig = Buffer.from(bytes.subarray(0, 12));
-      const valid =
-        (mime === "image/jpeg" && sig[0] === 255 && sig[1] === 216 && sig[2] === 255) ||
-        (mime === "image/png" && sig.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) ||
-        (mime === "image/webp" && sig.toString("ascii", 0, 4) === "RIFF" && sig.toString("ascii", 8, 12) === "WEBP");
-      if (!valid) fail(400, "Použi fotografiu JPG, PNG alebo WebP.");
+      const mime = request.headers.get("content-type")?.split(";")[0];
+      if (!validImage(mime, bytes)) fail(400, "Použi fotografiu JPG, PNG alebo WebP.");
       const id = uid();
       await BUCKET.put(id, bytes, { httpMetadata: { contentType: mime } });
       try {
@@ -755,12 +857,22 @@ export async function api(request, env, services = {}) {
       }
       return json({ id, url: "/media/" + id }, 201);
     }
-    if (/^uploads\/[\w-]+$/.test(path) && method === "DELETE") {
+    const um = path.match(/^uploads\/([\w-]{1,64})(?:\/(thumb))?$/);
+    if (um && um[2] === "thumb" && method === "POST") {
       need();
-      const id = path.split("/")[1];
-      const u = await first("SELECT * FROM uploads WHERE id=? AND owner=? AND listing_id IS NULL", id, user.id);
+      const u = await first("SELECT * FROM uploads WHERE id=? AND owner=?", um[1], user.id);
       if (!u) fail(404, "Fotografia sa nenašla.");
-      await deletePhotos([id]);
+      const bytes = await boundedBody(request, 400 * 1024);
+      if (!validImage("image/jpeg", bytes)) fail(400, "Náhľad musí byť JPG.");
+      await BUCKET.put("t/" + u.id, bytes, { httpMetadata: { contentType: "image/jpeg" } });
+      await run("UPDATE uploads SET thumb=1 WHERE id=?", u.id);
+      return json({ ok: true }, 201);
+    }
+    if (um && !um[2] && method === "DELETE") {
+      need();
+      const u = await first("SELECT * FROM uploads WHERE id=? AND owner=? AND listing_id IS NULL", um[1], user.id);
+      if (!u) fail(404, "Fotografia sa nenašla.");
+      await deletePhotos([u.id]);
       return json({ ok: true });
     }
 
@@ -768,27 +880,38 @@ export async function api(request, env, services = {}) {
     if (path === "listings" && method === "GET") {
       await ensureSearchIndex();
       const q = url.searchParams,
-        where = ["l.status='active'", "u.banned=0"],
-        args = [];
-      const country = ["sk", "cz"].includes(q.get("country")) ? q.get("country") : null;
-      if (country) {
-        where.push("l.country=?");
-        args.push(country);
-      }
+        where = [PUBLIC],
+        args = [now];
       if (q.get("type") === "buy" || q.get("type") === "sell") {
         where.push("l.buy=?");
         args.push(q.get("type") === "buy" ? 1 : 0);
       }
-      if (CATEGORIES.includes(q.get("cat"))) {
+      if (findCategory(q.get("cat"))) {
         where.push("l.category=?");
         args.push(q.get("cat"));
+        if (findSubcategory(q.get("cat"), q.get("sub"))) {
+          where.push("l.subcategory=?");
+          args.push(q.get("sub"));
+        }
       }
       if (CONDITIONS.includes(q.get("cond"))) {
         where.push("l.condition=?");
         args.push(q.get("cond"));
       }
+      if (/^[\w-]{1,64}$/.test(q.get("seller") || "")) {
+        where.push("l.owner=?");
+        args.push(q.get("seller"));
+      }
+      if (/^\d+$/.test(q.get("exclude") || "")) {
+        where.push("l.id<>?");
+        args.push(Number(q.get("exclude")));
+      }
+      if (q.get("photo") === "1") {
+        where.push("l.photos<>'[]'");
+      }
       const min = Number(q.get("min")),
         max = Number(q.get("max"));
+      if ((q.get("min") && min > 0) || (q.get("max") && max >= 0)) where.push("l.price_type IN ('fixed','free')");
       if (q.get("min") && Number.isFinite(min) && min > 0) {
         where.push("l.price>=?");
         args.push(Math.round(min * 100));
@@ -804,19 +927,27 @@ export async function api(request, env, services = {}) {
         where.push("l.search LIKE ? ESCAPE '\\'");
         args.push("%" + escapeLike(word) + "%");
       }
-      const loc = text(q.get("city"), 100);
+      const loc = text(q.get("loc") || q.get("city"), 100);
       if (loc) {
         const radius = Math.min(300, Math.max(0, Number(q.get("radius")) || 0)),
-          countries = country ? [country] : ["sk", "cz"];
-        let origin = null;
-        for (const c of countries) origin = origin || resolvePlace(c, loc);
-        if (origin && radius > 0) {
-          const keys = countries.flatMap((c) => placesWithin(c, origin, radius).map((p) => fold(p.name)));
-          where.push(`l.city_key IN (${keys.map(() => "?").join(",")})`);
-          args.push(...keys);
-        } else if (origin) {
-          where.push("l.city_key=?");
-          args.push(fold(origin.name));
+          origin = resolveOrigin(loc);
+        if (origin) {
+          const b = radiusBounds(origin, radius || 8);
+          where.push(
+            "l.lat BETWEEN ? AND ? AND l.lon BETWEEN ? AND ? AND ((l.lat-?)*(l.lat-?)+(l.lon-?)*(l.lon-?)*?)<=?",
+          );
+          args.push(
+            b.lat - b.dLat,
+            b.lat + b.dLat,
+            b.lon - b.dLon,
+            b.lon + b.dLon,
+            b.lat,
+            b.lat,
+            b.lon,
+            b.lon,
+            b.k2,
+            b.r2,
+          );
         } else if (fold(loc)) {
           where.push("l.city_key LIKE ? ESCAPE '\\'");
           args.push("%" + escapeLike(fold(loc)) + "%");
@@ -828,18 +959,20 @@ export async function api(request, env, services = {}) {
         args.push(user.id);
       }
       const sort = q.get("sort"),
-        order =
-          sort === "low"
-            ? "l.price ASC,l.created DESC"
-            : sort === "high"
-              ? "l.price DESC,l.created DESC"
-              : "(l.boost_until>?) DESC,l.created DESC";
+        priced = "(l.price_type IN ('fixed','free')) DESC,";
+      const order =
+        sort === "low"
+          ? priced + "l.price ASC,l.created DESC"
+          : sort === "high"
+            ? priced + "l.price DESC,l.created DESC"
+            : "(l.boost_until>?) DESC,l.created DESC";
       const p = paging(q, 24, 60),
         sqlWhere = where.join(" AND ");
-      const total = (await first(`SELECT count(*) n FROM listings l JOIN users u ON u.id=l.owner WHERE ${sqlWhere}`, ...args))
-        .n;
+      const total = (
+        await first(`SELECT count(*) n FROM listings l JOIN users u ON u.id=l.owner WHERE ${sqlWhere}`, ...args)
+      ).n;
       const rows = await all(
-        `${listingSelect} WHERE ${sqlWhere} ORDER BY ${order} LIMIT ? OFFSET ?`,
+        `${withColumns(viewCount + "," + photoThumbs)} WHERE ${sqlWhere} ORDER BY ${order} LIMIT ? OFFSET ?`,
         ...args,
         ...(sort === "low" || sort === "high" ? [] : [now]),
         p.limit,
@@ -848,18 +981,12 @@ export async function api(request, env, services = {}) {
       return json(pageResult("listings", rows.map(listingDTO), total, p));
     }
     if (path === "listings/featured" && method === "GET") {
-      const country = url.searchParams.get("country") === "cz" ? "cz" : "sk";
       const boosted = await all(
-        `${listingSelect} WHERE l.status='active' AND u.banned=0 AND l.country=? AND l.buy=0 AND l.boost_until>? ORDER BY random() LIMIT 4`,
-        country,
+        `${withColumns(photoThumbs)} WHERE ${PUBLIC} AND l.boost_until>? ORDER BY random() LIMIT 8`,
+        now,
         now,
       );
-      if (boosted.length) return json({ kind: "boosted", listings: boosted.map(listingDTO) });
-      const latest = await all(
-        `${listingSelect} WHERE l.status='active' AND u.banned=0 AND l.country=? ORDER BY l.created DESC LIMIT 8`,
-        country,
-      );
-      return json({ kind: "latest", listings: latest.map(listingDTO) });
+      return json({ listings: boosted.map(listingDTO) });
     }
     if (path === "listings" && method === "POST") {
       need();
@@ -876,21 +1003,26 @@ export async function api(request, env, services = {}) {
         id = nid();
       const result = await DB.batch([
         stmt(
-          "INSERT INTO listings(id,owner,title,description,category,price,city,country,condition,buy,phone,photos,created,updated,submission,search,city_key) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,? WHERE (SELECT count(*) FROM uploads WHERE owner=? AND listing_id IS NULL AND id IN (SELECT value FROM json_each(?)))=?",
+          "INSERT INTO listings(id,owner,title,description,category,subcategory,price,price_type,city,zip,lat,lon,country,condition,buy,phone,photos,created,updated,expires,submission,search,city_key) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,'sk',?,?,?,?,?,?,?,?,?,? WHERE (SELECT count(*) FROM uploads WHERE owner=? AND listing_id IS NULL AND id IN (SELECT value FROM json_each(?)))=?",
           id,
           user.id,
           f.title,
           f.description,
           f.category,
+          f.subcategory,
           f.price,
+          f.priceType,
           f.city,
-          f.country,
+          f.zip,
+          f.lat,
+          f.lon,
           f.condition,
           +f.buy,
           f.phone,
           encoded,
           now,
           now,
+          now + LISTING_DAYS * DAY,
           submission,
           f.search,
           f.cityKey,
@@ -907,31 +1039,32 @@ export async function api(request, env, services = {}) {
         ),
       ]);
       if (!result[0].meta?.changes) fail(409, "Fotografie sa zmenili alebo nepatria tomuto účtu. Nahraj ich znova.");
+      countsCache = null;
       return json({ id }, 201);
     }
-    const lm = path.match(/^listings\/(\d+)(?:\/(contacts|boost|view))?$/);
+    const lm = path.match(/^listings\/(\d+)(?:\/(contacts|boost|view|renew))?$/);
     if (lm) {
       const id = Number(lm[1]),
         action = lm[2],
         d = await listingRow(id);
       if (!d) fail(404, "Inzerát sa nenašiel.");
       const mine = user && d.owner === user.id,
-        publicVisible = ["active", "sold"].includes(d.status) && !d.owner_banned;
+        live = d.status === "active" && d.expires > now && !d.owner_banned;
       if (!action && method === "GET") {
-        if (!publicVisible && !mine && !admin()) fail(404, "Inzerát sa nenašiel.");
+        if (!isPublic(d) && !mine && !admin()) fail(404, "Inzerát sa nenašiel.");
         const out = listingDTO(d);
         if (admin() && !mine) Object.assign(out, { adminView: true, moderationNote: d.moderation_note || "" });
         return json({ listing: out });
       }
       if (action === "contacts" && method === "POST") {
         need();
-        if (d.status !== "active" || d.owner_banned) fail(404, "Inzerát nie je aktívny.");
+        if (!live) fail(404, "Inzerát nie je aktívny.");
         await limit("contacts", user.id, 60);
         return json({ email: d.owner_email, phone: d.phone });
       }
       if (action === "view" && method === "POST") {
         need();
-        if (!mine && d.status === "active")
+        if (!mine && live)
           await run(
             "INSERT OR IGNORE INTO listing_views(user_id,listing_id,day) VALUES(?,?,?)",
             user.id,
@@ -943,15 +1076,30 @@ export async function api(request, env, services = {}) {
       if (action === "boost" && method === "POST") {
         need();
         if (!mine) fail(404, "Inzerát sa nenašiel.");
-        if (d.status !== "active") fail(400, "Zvýrazniť možno iba aktívny inzerát.");
+        if (!live) fail(400, "Zvýrazniť možno iba aktívny inzerát.");
         const b = await bodyJSON(request);
         if (b.off === true) {
           await run("UPDATE listings SET boost_until=0 WHERE id=?", id);
           return json({ ok: true });
         }
         if (![3, 7, 14].includes(Number(b.days))) fail(400, "Vyber dĺžku zvýraznenia.");
-        await run("UPDATE listings SET boost_until=? WHERE id=?", now + Number(b.days) * DAY, id);
+        await run("UPDATE listings SET boost_until=? WHERE id=?", Math.min(now + Number(b.days) * DAY, d.expires), id);
         return json({ ok: true, free: true });
+      }
+      if (action === "renew" && method === "POST") {
+        need();
+        if (!mine) fail(404, "Inzerát sa nenašiel.");
+        if (!["active", "sold"].includes(d.status)) fail(400, "Tento inzerát nemožno predĺžiť.");
+        if (d.expires - now >= RENEW_WINDOW) fail(400, "Predĺžiť môžeš najskôr 7 dní pred koncom platnosti.");
+        const expires = now + LISTING_DAYS * DAY;
+        await run(
+          "UPDATE listings SET status='active',expires=?,expiry_notified=0,updated=? WHERE id=?",
+          expires,
+          now,
+          id,
+        );
+        countsCache = null;
+        return json({ ok: true, expires });
       }
       if (!action && (method === "PATCH" || method === "DELETE")) {
         need();
@@ -962,20 +1110,30 @@ export async function api(request, env, services = {}) {
         }
         if (d.status === "hidden") fail(403, "Inzerát je skrytý moderátorom. Môžeš ho iba odstrániť.");
         const b = await bodyJSON(request);
+        countsCache = null;
         if (b.status) {
           if (!["active", "sold"].includes(b.status)) fail(400, "Neplatný stav.");
-          await run("UPDATE listings SET status=?,boost_until=0,updated=? WHERE id=?", b.status, now, id);
+          const expires = b.status === "active" && d.expires <= now ? now + LISTING_DAYS * DAY : d.expires;
+          await run(
+            "UPDATE listings SET status=?,boost_until=0,expires=?,updated=? WHERE id=?",
+            b.status,
+            expires,
+            now,
+            id,
+          );
           return json({ ok: true });
         }
         const f = listingFields({
           title: d.title,
           desc: d.description,
           cat: d.category,
+          sub: d.subcategory,
           state: d.condition,
           city: d.city,
+          zip: d.zip,
           phone: d.phone,
-          country: d.country,
           buy: !!d.buy,
+          priceType: d.price_type,
           price: d.price / 100,
           ...b,
         });
@@ -983,13 +1141,17 @@ export async function api(request, env, services = {}) {
           encoded = JSON.stringify(ids);
         const result = await DB.batch([
           stmt(
-            "UPDATE listings SET title=?,description=?,category=?,price=?,city=?,country=?,condition=?,buy=?,phone=?,photos=?,search=?,city_key=?,updated=? WHERE id=? AND photos=? AND (SELECT count(*) FROM uploads WHERE owner=? AND (listing_id IS NULL OR listing_id=?) AND id IN (SELECT value FROM json_each(?)))=?",
+            "UPDATE listings SET title=?,description=?,category=?,subcategory=?,price=?,price_type=?,city=?,zip=?,lat=?,lon=?,condition=?,buy=?,phone=?,photos=?,search=?,city_key=?,updated=? WHERE id=? AND photos=? AND (SELECT count(*) FROM uploads WHERE owner=? AND (listing_id IS NULL OR listing_id=?) AND id IN (SELECT value FROM json_each(?)))=?",
             f.title,
             f.description,
             f.category,
+            f.subcategory,
             f.price,
+            f.priceType,
             f.city,
-            f.country,
+            f.zip,
+            f.lat,
+            f.lon,
             f.condition,
             +f.buy,
             f.phone,
@@ -1024,7 +1186,10 @@ export async function api(request, env, services = {}) {
             id,
             "%" + photo + "%",
           );
-          if (deleted.meta?.changes) await BUCKET.delete(photo);
+          if (deleted.meta?.changes) {
+            await BUCKET.delete(photo);
+            await BUCKET.delete("t/" + photo);
+          }
         }
         return json({ ok: true });
       }
@@ -1064,7 +1229,7 @@ export async function api(request, env, services = {}) {
       const from = `FROM conversations c LEFT JOIN listings l ON l.id=c.listing_id JOIN users p ON p.id=${peer}`;
       const total = (await first(`SELECT count(*) n ${from} WHERE ${where}`, user.id, ...args)).n;
       const rows = await all(
-        `SELECT c.*,l.title,l.price,l.country,l.buy,l.photos,l.status listing_status,p.name peer_name,p.id peer_id,
+        `SELECT c.*,l.title,l.price,l.price_type,l.buy,l.photos,l.status listing_status,l.expires listing_expires,p.name peer_name,p.id peer_id,
           (SELECT body FROM messages m WHERE m.conversation_id=c.id ORDER BY m.sent DESC,m.id DESC LIMIT 1) last_body,
           (SELECT sender FROM messages m WHERE m.conversation_id=c.id ORDER BY m.sent DESC,m.id DESC LIMIT 1) last_sender,
           ${unread} unread ${from} WHERE ${where} ORDER BY c.updated DESC LIMIT ? OFFSET ?`,
@@ -1087,14 +1252,15 @@ export async function api(request, env, services = {}) {
               peerKey: c.peer_id,
               title: c.title && c.listing_status !== "deleted" ? c.title : "Odstránený inzerát",
               price: (c.price || 0) / 100,
-              country: c.country || "sk",
+              priceType: c.price_type || "fixed",
               buy: !!c.buy,
-              photo: photos.length && c.listing_status !== "deleted" ? "/media/" + photos[0] : "/assets/wanted.svg",
+              photo:
+                photos.length && c.listing_status !== "deleted" ? "/media/" + photos[0] + "?t=1" : "/assets/wanted.svg",
               last: c.last_body || "",
               lastOut: c.last_sender === user.id,
               unread: c.unread,
               updatedAt: c.updated,
-              closed: c.listing_status !== "active",
+              closed: c.listing_status !== "active" || c.listing_expires <= now,
               blocked: blockedPeers.includes(c.peer_id),
             };
           }),
@@ -1109,7 +1275,7 @@ export async function api(request, env, services = {}) {
       need();
       const b = await bodyJSON(request),
         d = await listingRow(Number(b.id));
-      if (!d || d.status !== "active" || d.owner_banned) fail(404, "Inzerát nie je aktívny.");
+      if (!d || d.status !== "active" || d.expires <= now || d.owner_banned) fail(404, "Inzerát nie je aktívny.");
       if (d.owner === user.id) fail(400, "Nemôžeš písať sám sebe.");
       if (await blocked(user.id, d.owner)) fail(403, "Komunikácia je zablokovaná.");
       await run(
@@ -1146,10 +1312,10 @@ export async function api(request, env, services = {}) {
             peerDeleted: !p || !!p.deleted,
             title: d && d.status !== "deleted" ? d.title : "Odstránený inzerát",
             price: (d?.price || 0) / 100,
-            country: d?.country || "sk",
+            priceType: d?.price_type || "fixed",
             buy: !!d?.buy,
-            photo: photos.length ? "/media/" + photos[0] : "/assets/wanted.svg",
-            closed: !d || d.status !== "active",
+            photo: photos.length ? "/media/" + photos[0] + "?t=1" : "/assets/wanted.svg",
+            closed: !d || d.status !== "active" || d.expires <= now,
             blocked: !!(await first("SELECT 1 FROM blocks WHERE user_id=? AND peer=?", user.id, peer)),
             blockedBy: !!(await first("SELECT 1 FROM blocks WHERE user_id=? AND peer=?", peer, user.id)),
             role: c.buyer === user.id ? "buyer" : "seller",
@@ -1187,10 +1353,10 @@ export async function api(request, env, services = {}) {
         if (p.notifications && !p.banned && !pending.n)
           notify(
             p.email,
-            "Nová správa — Bazaro",
-            `${user.name} ti poslal(a) správu na Bazaro.\n\nPrečítať a odpovedať: ${env.APP_URL}/spravy/?inzerat=${c.id}\n\nUpozornenia vypneš v časti Správy → Emailové upozornenia.`,
+            `Nová správa — ${site}`,
+            `${user.name} ti poslal(a) správu na ${site}.\n\nPrečítať a odpovedať: ${env.APP_URL}/spravy/?inzerat=${c.id}\n\nUpozornenia vypneš v časti Správy → Emailové upozornenia.`,
           );
-        return json({ ok: true, message: messageDTO(m) }, 201);
+        return json({ ok: true, message: messageDTO(m), id: String(c.id) }, 201);
       }
       if (action === "messages" && method === "GET") {
         const q = url.searchParams;
@@ -1250,6 +1416,7 @@ export async function api(request, env, services = {}) {
         contact = text(b.email || user?.email, 254);
       if (details.length < 10 || !reason || !emailValid(contact) || b.confirm !== true)
         fail(400, "Vyplň dôvod, podrobnosti, email a potvrď pravdivosť hlásenia.");
+      if (!user) await verifyHuman(env, b.captcha, ip, services);
       let id = Number(b.listingId) || null;
       if (id && !(await listingRow(id))) id = null;
       const note =
@@ -1267,7 +1434,7 @@ export async function api(request, env, services = {}) {
       for (const to of adminEmails(env))
         notify(
           to,
-          "Nové hlásenie — Bazaro",
+          `Nové hlásenie — ${site}`,
           `Dôvod: ${reason}\n${id ? "Inzerát: " + env.APP_URL + "/inzerat/?id=" + id + "\n" : ""}\nPosúdiť: ${env.APP_URL}/administracia/?sekcia=hlasenia`,
         );
       return json({ ok: true }, 201);
@@ -1279,6 +1446,7 @@ export async function api(request, env, services = {}) {
       const q = url.searchParams,
         sub = path.slice(6);
       async function moderateListing(d, action, note) {
+        countsCache = null;
         if (action === "hide") {
           if (!["active", "sold"].includes(d.status)) fail(400, "Skryť možno iba zverejnený inzerát.");
           await DB.batch([
@@ -1297,12 +1465,17 @@ export async function api(request, env, services = {}) {
           ]);
           notify(
             d.owner_email,
-            "Tvoj inzerát bol skrytý — Bazaro",
-            `Inzerát „${d.title}“ sme skryli, pretože porušuje pravidlá inzercie.${note ? "\n\nDôvod: " + note : ""}\n\nPravidlá: ${env.APP_URL}/pravidla-inzercie/\nAk nesúhlasíš, odpovedz prevádzkovateľovi cez kontakt uvedený na ${env.APP_URL}/kontakt/`,
+            `Tvoj inzerát bol skrytý — ${site}`,
+            `Inzerát „${d.title}“ sme skryli, pretože porušuje pravidlá inzercie.${note ? "\n\nDôvod: " + note : ""}\n\nPravidlá: ${env.APP_URL}/pravidla-inzercie/\nAk nesúhlasíš, ozvi sa prevádzkovateľovi cez kontakt uvedený na ${env.APP_URL}/kontakt/`,
           );
         } else if (action === "restore") {
           if (d.status !== "hidden") fail(400, "Obnoviť možno iba skrytý inzerát.");
-          await run("UPDATE listings SET status='active',moderation_note='',updated=? WHERE id=?", now, d.id);
+          await run(
+            "UPDATE listings SET status='active',moderation_note='',expires=max(expires,?),updated=? WHERE id=?",
+            now + 7 * DAY,
+            now,
+            d.id,
+          );
         } else if (action === "delete") {
           await removeListing(d);
           await run(
@@ -1313,7 +1486,7 @@ export async function api(request, env, services = {}) {
           );
           notify(
             d.owner_email,
-            "Tvoj inzerát bol odstránený — Bazaro",
+            `Tvoj inzerát bol odstránený — ${site}`,
             `Inzerát „${d.title}“ bol odstránený administrátorom.${note ? "\n\nDôvod: " + note : ""}\n\nPravidlá: ${env.APP_URL}/pravidla-inzercie/`,
           );
         } else if (action === "unboost") {
@@ -1329,7 +1502,8 @@ export async function api(request, env, services = {}) {
             (SELECT count(*) FROM users WHERE deleted=0 AND verified=1) verified,
             (SELECT count(*) FROM users WHERE deleted=0 AND banned=1) banned,
             (SELECT count(*) FROM users WHERE deleted=0 AND created>?) usersWeek,
-            (SELECT count(*) FROM listings WHERE status='active') active,
+            (SELECT count(*) FROM listings WHERE status='active' AND expires>?) active,
+            (SELECT count(*) FROM listings WHERE status='active' AND expires<=?) expired,
             (SELECT count(*) FROM listings WHERE status='sold') sold,
             (SELECT count(*) FROM listings WHERE status='hidden') hidden,
             (SELECT count(*) FROM listings WHERE status<>'deleted' AND created>?) listingsWeek,
@@ -1340,14 +1514,25 @@ export async function api(request, env, services = {}) {
             (SELECT coalesce(sum(bytes),0) FROM uploads) storageBytes,
             (SELECT count(*) FROM uploads) photos`,
           week,
+          now,
+          now,
           week,
           now,
           week,
         );
-        const categories = await all(
-          "SELECT category,count(*) n FROM listings WHERE status='active' GROUP BY category ORDER BY n DESC",
-        );
-        return json({ stats: s, categories, email: mailReady(env), version: VERSION });
+        const categories = (
+          await all(
+            "SELECT category,count(*) n FROM listings WHERE status='active' AND expires>? GROUP BY category ORDER BY n DESC",
+            now,
+          )
+        ).map((c) => ({ category: findCategory(c.category)?.name || c.category, n: c.n }));
+        return json({
+          stats: s,
+          categories,
+          email: mailReady(env),
+          antispam: !!env.TURNSTILE_SECRET,
+          version: VERSION,
+        });
       }
       if (sub === "reports" && method === "GET") {
         const p = paging(q, 25, 100),
@@ -1375,7 +1560,7 @@ export async function api(request, env, services = {}) {
         if (b.action === "hide" || b.action === "delete") {
           const d = r.listing_id ? await listingRow(r.listing_id) : null;
           if (!d) fail(400, "Hlásenie nemá dostupný inzerát.");
-          await moderateListing(d, b.action, note);
+          await moderateListing({ ...d, owner_email: d.owner_email }, b.action, note);
         } else if (b.action === "resolve") {
           await run(
             "UPDATE reports SET status='resolved',resolution=?,resolved=? WHERE id=?",
@@ -1397,7 +1582,10 @@ export async function api(request, env, services = {}) {
           term = text(q.get("q"), 200),
           where = [],
           args = [];
-        if (["active", "sold", "hidden", "deleted"].includes(status)) {
+        if (status === "expired") {
+          where.push("l.status='active' AND l.expires<=?");
+          args.push(now);
+        } else if (["active", "sold", "hidden", "deleted"].includes(status)) {
           where.push("l.status=?");
           args.push(status);
         } else where.push("l.status<>'deleted'");
@@ -1417,10 +1605,11 @@ export async function api(request, env, services = {}) {
             args.push("%" + escapeLike(word) + "%");
           }
         const sqlWhere = where.join(" AND ");
-        const total = (await first(`SELECT count(*) n FROM listings l JOIN users u ON u.id=l.owner WHERE ${sqlWhere}`, ...args))
-          .n;
+        const total = (
+          await first(`SELECT count(*) n FROM listings l JOIN users u ON u.id=l.owner WHERE ${sqlWhere}`, ...args)
+        ).n;
         const rows = await all(
-          `${listingSelect.replace("FROM", ",(SELECT count(*) FROM reports r WHERE r.listing_id=l.id AND r.status='open') open_reports FROM")} WHERE ${sqlWhere} ORDER BY l.created DESC LIMIT ? OFFSET ?`,
+          `${withColumns(photoThumbs + ",(SELECT count(*) FROM reports r WHERE r.listing_id=l.id AND r.status='open') open_reports")} WHERE ${sqlWhere} ORDER BY l.created DESC LIMIT ? OFFSET ?`,
           ...args,
           p.limit,
           p.offset,
@@ -1489,6 +1678,7 @@ export async function api(request, env, services = {}) {
         if (!target) fail(404, "Používateľ sa nenašiel.");
         if (["ban", "delete", "logout"].includes(b.action) && adminEmails(env).includes(target.email))
           fail(400, "Administrátorský účet takto upraviť nemožno.");
+        countsCache = null;
         if (b.action === "ban") {
           await DB.batch([
             stmt("UPDATE users SET banned=1,ban_reason=? WHERE id=?", note, target.id),
@@ -1497,8 +1687,8 @@ export async function api(request, env, services = {}) {
           ]);
           notify(
             target.email,
-            "Tvoj účet bol zablokovaný — Bazaro",
-            `Tvoj účet na Bazaro bol zablokovaný pre porušenie pravidiel.${note ? "\n\nDôvod: " + note : ""}\n\nKontakt: ${env.APP_URL}/kontakt/`,
+            `Tvoj účet bol zablokovaný — ${site}`,
+            `Tvoj účet na ${site} bol zablokovaný pre porušenie pravidiel.${note ? "\n\nDôvod: " + note : ""}\n\nKontakt: ${env.APP_URL}/kontakt/`,
           );
         } else if (b.action === "unban") await run("UPDATE users SET banned=0,ban_reason='' WHERE id=?", target.id);
         else if (b.action === "verify") await run("UPDATE users SET verified=1 WHERE id=?", target.id);
@@ -1522,16 +1712,29 @@ export async function api(request, env, services = {}) {
   }
 }
 
+function validImage(mime, bytes) {
+  const sig = Buffer.from(bytes.subarray(0, 12));
+  return (
+    (mime === "image/jpeg" && sig[0] === 255 && sig[1] === 216 && sig[2] === 255) ||
+    (mime === "image/png" && sig.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) ||
+    (mime === "image/webp" && sig.toString("ascii", 0, 4) === "RIFF" && sig.toString("ascii", 8, 12) === "WEBP")
+  );
+}
+
 export async function media(request, env) {
-  const id = new URL(request.url).pathname.split("/")[2];
+  const url = new URL(request.url),
+    id = url.pathname.split("/")[2];
   if (!id || !/^[\w-]{1,64}$/.test(id)) return new Response("Not found", { status: 404 });
   const row = await env.DB.prepare(
-    "SELECT up.*,l.status,o.banned owner_banned FROM uploads up LEFT JOIN listings l ON l.id=up.listing_id LEFT JOIN users o ON o.id=up.owner WHERE up.id=?",
+    "SELECT up.*,l.status,l.expires,o.banned owner_banned FROM uploads up LEFT JOIN listings l ON l.id=up.listing_id LEFT JOIN users o ON o.id=up.owner WHERE up.id=?",
   )
     .bind(id)
     .first();
   if (!row) return new Response("Not found", { status: 404 });
-  const isPublic = row.listing_id && ["active", "sold"].includes(row.status) && !row.owner_banned;
+  const isPublic =
+    row.listing_id &&
+    !row.owner_banned &&
+    (row.status === "sold" || (row.status === "active" && row.expires > Date.now()));
   if (!isPublic) {
     const t = sessionToken(request);
     const viewer = t
@@ -1544,12 +1747,13 @@ export async function media(request, env) {
     if (!viewer || (viewer.id !== row.owner && !isAdminUser(env, viewer)))
       return new Response("Not found", { status: 404 });
   }
-  const obj = await env.BUCKET.get(id);
+  const thumb = url.searchParams.get("t") === "1" && row.thumb;
+  const obj = (thumb && (await env.BUCKET.get("t/" + id))) || (await env.BUCKET.get(id));
   if (!obj) return new Response("Not found", { status: 404 });
   return new Response(request.method === "HEAD" ? null : obj.body, {
     headers: {
-      "Content-Type": row.mime,
-      "Cache-Control": isPublic ? "public, max-age=3600" : "private, no-store",
+      "Content-Type": thumb ? "image/jpeg" : row.mime,
+      "Cache-Control": isPublic ? "public, max-age=86400" : "private, no-store",
       "X-Content-Type-Options": "nosniff",
       "Content-Security-Policy": "default-src 'none'",
     },
@@ -1557,20 +1761,51 @@ export async function media(request, env) {
 }
 
 // Daily housekeeping, triggered by the cron schedule in wrangler.jsonc.
-export async function maintenance(env, now = Date.now()) {
+export async function maintenance(env, now = Date.now(), services = {}) {
   const DB = env.DB,
-    run = (q, ...a) => DB.prepare(q).bind(...a).run();
+    run = (q, ...a) =>
+      DB.prepare(q)
+        .bind(...a)
+        .run(),
+    all = async (q, ...a) =>
+      (
+        await DB.prepare(q)
+          .bind(...a)
+          .all()
+      ).results,
+    site = siteName(env);
   await run("DELETE FROM rate_limits WHERE expires<?", now);
   await run("DELETE FROM sessions WHERE expires<?", now);
   await run("DELETE FROM email_tokens WHERE expires<?", now);
-  const stale = (
-    await DB.prepare("SELECT id FROM uploads WHERE listing_id IS NULL AND created<? LIMIT 500")
-      .bind(now - DAY)
-      .all()
-  ).results;
+  const stale = await all("SELECT id FROM uploads WHERE listing_id IS NULL AND created<? LIMIT 500", now - DAY);
   for (const f of stale) {
     await run("DELETE FROM uploads WHERE id=?", f.id);
     await env.BUCKET.delete(f.id);
+    await env.BUCKET.delete("t/" + f.id);
   }
-  return { removedUploads: stale.length };
+  // Remind owners three days before a listing expires.
+  const expiring = await all(
+    "SELECT l.id,l.title,l.expires,u.email FROM listings l JOIN users u ON u.id=l.owner WHERE l.status='active' AND l.expiry_notified=0 AND l.expires>? AND l.expires<=? AND u.deleted=0 AND u.banned=0 LIMIT 300",
+    now,
+    now + 3 * DAY,
+  );
+  let reminded = 0;
+  for (const l of expiring) {
+    await run("UPDATE listings SET expiry_notified=1 WHERE id=?", l.id);
+    if (!mailReady(env)) continue;
+    const date = new Date(l.expires).toLocaleDateString("sk-SK", { timeZone: "Europe/Bratislava" });
+    try {
+      await sendMail(
+        env,
+        l.email,
+        `Tvoj inzerát čoskoro vyprší — ${site}`,
+        `Inzerát „${l.title}“ bude zverejnený do ${date}.\n\nAk ešte platí, predĺž ho jedným klikom o ${LISTING_DAYS} dní:\n${env.APP_URL}/ucet/?sekcia=inzeraty\n\nAk je už predaný, nemusíš robiť nič.`,
+        services,
+      );
+      reminded++;
+    } catch (e) {
+      console.error("bazaro_expiry_mail_failure", e.message);
+    }
+  }
+  return { removedUploads: stale.length, reminded };
 }

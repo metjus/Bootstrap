@@ -118,7 +118,7 @@ const types = {
     // Empty home page
     const seller = await newPage();
     await seller.goto(ORIGIN + "/");
-    await seller.getByText("Zatiaľ tu nie sú žiadne inzeráty").waitFor();
+    await seller.getByText("Zatiaľ tu nie je žiadny inzerát").waitFor();
     await shot(seller, "01-home-empty");
 
     // Seller registers, verifies email and publishes a listing with a photo
@@ -127,11 +127,16 @@ const types = {
     const photo = path.join(require("node:os").tmpdir(), "bazaro-e2e.png");
     fs.writeFileSync(photo, await seller.screenshot());
     await seller.goto(ORIGIN + "/pridat/");
-    await seller.selectOption("#draftCategory", "Šport");
+    await seller.selectOption("#draftCategory", "sport");
+    await seller.locator("#draftSub:not([disabled])").waitFor();
+    await seller.selectOption("#draftSub", "bicykle");
     await seller.fill("#draftTitle", "Horský bicykel Trek Marlin");
     await seller.fill("#draftDescription", "Pravidelne servisovaný, nové brzdové platničky. Osobný odber.");
     await seller.fill("#draftPrice", "420");
+    await seller.fill("#draftZip", "917 01");
     await seller.fill("#draftCity", "Trnava");
+    await seller.locator("#draftPlace", { hasText: "Trnava" }).waitFor();
+    await shot(seller, "03a-create-details");
     await seller.click("#nextStep");
     await seller.setInputFiles("#draftUpload", photo);
     await seller.locator(".draft-photo").first().waitFor();
@@ -147,22 +152,32 @@ const types = {
     assert(listingId > 0);
     await seller.goto(ORIGIN + "/ucet/");
     await seller.getByText("Horský bicykel Trek Marlin").first().waitFor();
+    await seller.getByText(/Platí ešte 60 dní/).waitFor();
     await shot(seller, "05-account-listings");
 
     // Visitor searches without diacritics, filters by radius and opens the detail
     const visitor = await newPage(390);
     await visitor.goto(ORIGIN + "/");
-    await visitor.locator("#boostGrid .card").first().waitFor();
+    await visitor.locator("#latestRows .lrow").first().waitFor();
+    await visitor.locator("#topStrip .card").first().waitFor();
     await shot(visitor, "06-home-mobile");
     await visitor.goto(ORIGIN + "/inzeraty/?q=horsky%20bicykel&mesto=Bratislava&okruh=50");
-    await visitor.locator("#grid .card").first().waitFor();
+    await visitor.locator("#results .lrow").first().waitFor();
     assert.match(await visitor.textContent("#resultCount"), /^1 /);
     await shot(visitor, "07-search-mobile");
+    await visitor.goto(ORIGIN + "/inzeraty/?mesto=Ko%C5%A1ice&okruh=50");
+    await visitor.locator("#empty:not([hidden])").waitFor();
+    await visitor.goto(ORIGIN + "/sport/bicykle/");
+    await visitor.locator("#results .lrow").first().waitFor();
+    assert.match(await visitor.textContent("#offersTitle"), /Bicykle/);
     await visitor.goto(ORIGIN + "/inzeraty/?q=neexistuje");
     await visitor.locator("#empty:not([hidden])").waitFor();
     await visitor.goto(ORIGIN + listingUrl);
     await visitor.getByRole("heading", { name: "Horský bicykel Trek Marlin" }).waitFor();
     await shot(visitor, "08-detail-mobile");
+    await visitor.goto(ORIGIN + (await visitor.locator(".seller-card").getAttribute("href")));
+    await visitor.getByRole("heading", { name: "Peter Predajca" }).waitFor();
+    await visitor.locator("#results .lrow").first().waitFor();
 
     // Buyer contacts the seller
     const buyer = await newPage();
@@ -171,11 +186,12 @@ const types = {
     await buyer.click("#revealContacts");
     await buyer.getByText("peter@bazaro.test").waitFor();
     await buyer.click("[data-fav-label]");
-    await buyer.getByText("♥ Uložené").waitFor();
+    await buyer.locator("[data-fav-label]", { hasText: "Uložené" }).waitFor();
     await buyer.click("#contact");
-    await buyer.waitForURL(/\/spravy\/\?inzerat=/);
-    await buyer.fill("#messageText", "Dobrý deň, je bicykel ešte dostupný?");
-    await buyer.click("#sendMessage");
+    await buyer.fill("#composerText", "Dobrý deň, je bicykel ešte dostupný?");
+    await buyer.click("#composerSend");
+    await buyer.getByText("Správa je odoslaná").waitFor();
+    await buyer.goto(ORIGIN + (await buyer.locator("#composer a").getAttribute("href")));
     await buyer.locator(".conversation-message.outgoing").first().waitFor();
     assert(mails.some((m) => m.to[0] === "peter@bazaro.test" && /Nová správa/.test(m.subject)));
 
@@ -212,7 +228,7 @@ const types = {
     await admin.getByText("Žiadne hlásenia.").waitFor();
     assert(mails.some((m) => m.to[0] === "peter@bazaro.test" && /Zavádzajúca fotografia/.test(m.text)));
     await visitor.goto(ORIGIN + listingUrl);
-    await visitor.getByText("Inzerát nie je dostupný.").waitFor();
+    await visitor.getByText("Inzerát nie je dostupný").waitFor();
     await seller.goto(ORIGIN + "/ucet/");
     await seller.getByText("Skryté moderátorom").waitFor();
     await admin.goto(ORIGIN + "/administracia/?sekcia=pouzivatelia");
@@ -226,11 +242,12 @@ const types = {
     await visitor.getByText("Testovací prevádzkovateľ s.r.o.").first().waitFor();
     await shot(visitor, "13-contact-mobile");
     await visitor.goto(ORIGIN + "/kategorie/");
-    await visitor.locator("#categories .category").first().waitFor();
+    await visitor.locator("#catBoard .cat-tile").first().waitFor();
+    await shot(visitor, "14-categories-mobile");
 
     assert.deepEqual(errors, [], "browser console errors");
     console.log(
-      "Passed: e2e in Chromium — registration, email verification, login, listing with photo editor, search, contacts, favorites, messages, reporting, admin moderation and legal pages.",
+      "Passed: e2e in Chromium — registration, email verification, login, listing with subcategory, PSČ and photo editor, search with radius, category page, seller page, contacts, favorites, messages, reporting, admin moderation and legal pages.",
     );
   } finally {
     await browser.close();

@@ -28,13 +28,15 @@
     }
   ],
   "vars": {
+    "SITE_NAME": "Bazaro",
     "APP_URL": "",
     "ADMIN_EMAIL": "",
     "MAIL_FROM": "",
     "OPERATOR_NAME": "Matúš Šturdík",
     "OPERATOR_ADDRESS": "Nová 407, Veľká Mača",
     "OPERATOR_ID": "51628163",
-    "CONTACT_EMAIL": "info@bazaro.sk",
+    "CONTACT_EMAIL": "",
+    "TURNSTILE_SITE_KEY": "",
     "PUBLIC_INDEXING": "false"
   },
   "triggers": {

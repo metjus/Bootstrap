@@ -16,7 +16,8 @@
     "test:runtime": "node scripts/build.mjs && node tests/workers-runtime.cjs",
     "check": "node scripts/check-config.mjs",
     "build": "node scripts/build.mjs",
-    "test:e2e": "node scripts/build.mjs && node tests/e2e.cjs"
+    "test:e2e": "node scripts/build.mjs && node tests/e2e.cjs",
+    "postal": "node scripts/postal.mjs"
   },
   "devDependencies": {
     "playwright-core": "1.56.1",

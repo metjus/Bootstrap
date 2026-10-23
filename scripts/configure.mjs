@@ -11,8 +11,18 @@ try {
       console.log("Neplatná hodnota. Skús znova.");
     }
   };
-  const currentDb = c.d1_databases[0].database_id === "00000000-0000-0000-0000-000000000000" ? "" : c.d1_databases[0].database_id;
-  c.d1_databases[0].database_id = await ask("ID vytvorenej D1 databázy", currentDb, (v) => /^[0-9a-f-]{36}$/i.test(v) && !/^0{8}-/.test(v));
+  const currentDb =
+    c.d1_databases[0].database_id === "00000000-0000-0000-0000-000000000000" ? "" : c.d1_databases[0].database_id;
+  c.d1_databases[0].database_id = await ask(
+    "ID vytvorenej D1 databázy",
+    currentDb,
+    (v) => /^[0-9a-f-]{36}$/i.test(v) && !/^0{8}-/.test(v),
+  );
+  c.vars.SITE_NAME = await ask(
+    "Názov webu (zobrazí sa v logu a emailoch)",
+    c.vars.SITE_NAME,
+    (v) => v.length >= 2 && v.length <= 40,
+  );
   c.vars.APP_URL = await ask("HTTPS adresa webu bez lomky na konci", c.vars.APP_URL, (v) => {
     try {
       const u = new URL(v);
@@ -24,14 +34,29 @@ try {
   c.vars.ADMIN_EMAIL = await ask("Email(y) administrátorov, oddelené čiarkou", c.vars.ADMIN_EMAIL, (v) =>
     v.split(",").every((x) => email(x.trim())),
   );
-  c.vars.MAIL_FROM = await ask("Odosielateľ, napr. Bazaro <noreply@mail.tvojadomena.sk>", c.vars.MAIL_FROM, (v) => /@/.test(v));
+  c.vars.MAIL_FROM = await ask("Odosielateľ, napr. Bazaro <noreply@mail.tvojadomena.sk>", c.vars.MAIL_FROM, (v) =>
+    /@/.test(v),
+  );
   console.log("\nÚdaje prevádzkovateľa sa zobrazia v kontakte, podmienkach a ochrane údajov.");
-  c.vars.OPERATOR_NAME = await ask("Názov firmy alebo meno prevádzkovateľa", c.vars.OPERATOR_NAME, (v) => v.length >= 3);
+  c.vars.OPERATOR_NAME = await ask(
+    "Názov firmy alebo meno prevádzkovateľa",
+    c.vars.OPERATOR_NAME,
+    (v) => v.length >= 3,
+  );
   c.vars.OPERATOR_ADDRESS = await ask("Sídlo / adresa prevádzkovateľa", c.vars.OPERATOR_ADDRESS, (v) => v.length >= 5);
   c.vars.OPERATOR_ID = await ask("IČO (ak nemáš, nechaj prázdne)", c.vars.OPERATOR_ID, () => true);
   c.vars.CONTACT_EMAIL = await ask("Verejný kontaktný email", c.vars.CONTACT_EMAIL, email);
+  console.log("\nOchrana proti robotom (Cloudflare Turnstile) je voliteľná. Site key nájdeš v Cloudflare → Turnstile.");
+  c.vars.TURNSTILE_SITE_KEY = await ask(
+    "Turnstile site key (ak zatiaľ nemáš, nechaj prázdne)",
+    c.vars.TURNSTILE_SITE_KEY,
+    () => true,
+  );
   writeFileSync("wrangler.jsonc", JSON.stringify(c, null, 2) + "\n");
-  console.log("Uložené. RESEND_API_KEY nastav cez: npx wrangler secret put RESEND_API_KEY");
+  console.log(
+    "Uložené. Tajné kľúče nastav cez: npx wrangler secret put RESEND_API_KEY" +
+      (c.vars.TURNSTILE_SITE_KEY ? " a npx wrangler secret put TURNSTILE_SECRET" : ""),
+  );
 } finally {
   io.close();
 }

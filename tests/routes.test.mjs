@@ -59,8 +59,51 @@ test("operator details come from configuration and unknown paths return the 404 
     ASSETS: { fetch: async () => new Response("missing", { status: 404 }) },
   });
   assert.equal(r.status, 404);
-  assert((await r.text()).includes("Táto stránka neexistuje"));
-  assert.equal((await handle(new Request("https://bazaro.test/__404"), { ...env, ASSETS: { fetch: async () => new Response("x", { status: 404 }) } })).status, 404);
+  assert((await r.text()).includes("Táto stránka sa už predala"));
+  assert.equal(
+    (
+      await handle(new Request("https://bazaro.test/__404"), {
+        ...env,
+        ASSETS: { fetch: async () => new Response("x", { status: 404 }) },
+      })
+    ).status,
+    404,
+  );
+});
+test("category pages, site name and sitemap", async () => {
+  let r = await handle(new Request("https://bazaro.test/auto/osobne-auta/"), { ...env, SITE_NAME: "Bazárik" });
+  assert.equal(r.status, 200);
+  const html = await r.text();
+  assert(html.includes("<title>Osobné autá — Auto — bazár Bazárik</title>"));
+  assert(html.includes('data-page="listings"'));
+  assert(!html.includes("{{SITE_NAME}}"));
+  assert.equal((await handle(new Request("https://bazaro.test/auto"), env)).status, 301);
+  assert.equal(
+    (
+      await handle(new Request("https://bazaro.test/auto/neexistuje/"), {
+        ...env,
+        ASSETS: { fetch: async () => new Response("x", { status: 404 }) },
+      })
+    ).status,
+    404,
+  );
+  r = await handle(new Request("https://bazaro.test/sitemap.xml"), {
+    ...env,
+    PUBLIC_INDEXING: "true",
+    DB: {
+      prepare: () => ({
+        bind() {
+          return this;
+        },
+        async all() {
+          return { results: [] };
+        },
+      }),
+    },
+  });
+  const xml = await r.text();
+  assert(xml.includes("https://bazaro.test/reality/byty/"));
+  assert(!xml.includes("/predajca/"));
 });
 test("forged platform headers do not grant moderation on public hosting", async () => {
   const r = await handle(

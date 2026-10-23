@@ -14,8 +14,15 @@ const adminState = {
   filter: params.get("filter") || "",
   owner: params.get("owner") || "",
 };
-const listingStatus = { active: "Aktívny", sold: "Ukončený", hidden: "Skrytý", deleted: "Odstránený" };
-const bytes = (n) => (n > 1e9 ? (n / 1e9).toFixed(2) + " GB" : n > 1e6 ? (n / 1e6).toFixed(1) + " MB" : Math.round(n / 1e3) + " kB");
+const listingStatus = {
+  active: "Aktívny",
+  expired: "Vypršaný",
+  sold: "Ukončený",
+  hidden: "Skrytý",
+  deleted: "Odstránený",
+};
+const bytes = (n) =>
+  n > 1e9 ? (n / 1e9).toFixed(2) + " GB" : n > 1e6 ? (n / 1e6).toFixed(1) + " MB" : Math.round(n / 1e3) + " kB";
 function adminUrl(changes = {}) {
   const s = { ...adminState, ...changes },
     q = new URLSearchParams({ sekcia: s.tab });
@@ -53,20 +60,23 @@ async function overview() {
     `<${href ? `a href="${href}"` : "div"} class="admin-stat"><span>${label}</span><strong>${value}</strong></${href ? "a" : "div"}>`;
   return {
     counts: { hlasenia: s.openReports },
-    body: `${!r.email ? '<div class="notice">Odosielanie emailov nie je nakonfigurované (RESEND_API_KEY, MAIL_FROM, APP_URL). Registrácia a obnova hesla nefungujú.</div>' : ""}<div class="admin-stats">${[
+    body: `${!r.email ? '<div class="notice">Odosielanie emailov nie je nakonfigurované (RESEND_API_KEY, MAIL_FROM, APP_URL). Registrácia a obnova hesla nefungujú.</div>' : ""}${!r.antispam ? '<div class="notice info" style="margin-bottom:16px">Ochrana proti robotom (Turnstile) nie je zapnutá. Odporúčame ju pred spustením nastaviť.</div>' : ""}<div class="admin-stats">${[
       tile("Otvorené hlásenia", s.openReports, adminUrl({ tab: "hlasenia", filter: "open", page: 1 })),
       tile("Aktívne inzeráty", s.active, adminUrl({ tab: "inzeraty", filter: "active", page: 1 })),
       tile("Nové inzeráty (7 dní)", s.listingsWeek),
       tile("Skryté inzeráty", s.hidden, adminUrl({ tab: "inzeraty", filter: "hidden", page: 1 })),
       tile("Ukončené inzeráty", s.sold),
-      tile("Zvýraznené (Boost)", s.boosted),
+      tile("Zvýraznené (TOP)", s.boosted),
+      tile("Vypršané inzeráty", s.expired, adminUrl({ tab: "inzeraty", filter: "expired", page: 1 })),
       tile("Používatelia", s.users, adminUrl({ tab: "pouzivatelia", page: 1 })),
       tile("Noví používatelia (7 dní)", s.usersWeek),
       tile("Overení používatelia", s.verified),
       tile("Zablokovaní", s.banned, adminUrl({ tab: "pouzivatelia", filter: "banned", page: 1 })),
       tile("Správy (7 dní)", s.messagesWeek),
       tile("Fotografie", s.photos + " · " + bytes(s.storageBytes)),
-    ].join("")}</div><div class="workspace-heading"><h2>Aktívne inzeráty podľa kategórií</h2></div><div class="admin-bars">${
+    ].join(
+      "",
+    )}</div><div class="workspace-heading"><h2>Aktívne inzeráty podľa kategórií</h2></div><div class="admin-bars">${
       r.categories.length
         ? r.categories
             .map(
@@ -87,7 +97,10 @@ async function reports() {
       ["resolved", "Vybavené"],
       ["all", "Všetky"],
     ]
-      .map(([v, l]) => `<button type="button" data-filter="${v}" class="${filter === v ? "active" : ""}" aria-pressed="${filter === v}">${l}</button>`)
+      .map(
+        ([v, l]) =>
+          `<button type="button" data-filter="${v}" class="${filter === v ? "active" : ""}" aria-pressed="${filter === v}">${l}</button>`,
+      )
       .join("")}</div><p class="results-meta">${r.total} hlásení</p>${
       r.reports.length
         ? r.reports
@@ -111,14 +124,25 @@ async function reports() {
         const action = b.dataset.action,
           withNote = ["hide", "delete", "resolve"].includes(action);
         const note = await confirmDialog({
-          title: { hide: "Skryť inzerát?", delete: "Odstrániť inzerát?", resolve: "Vybaviť hlásenie?", reopen: "Znovu otvoriť hlásenie?" }[action],
-          text: action === "hide" || action === "delete" ? "Inzerujúcemu pošleme email s dôvodom. Ostatné otvorené hlásenia k inzerátu sa vybavia." : "",
+          title: {
+            hide: "Skryť inzerát?",
+            delete: "Odstrániť inzerát?",
+            resolve: "Vybaviť hlásenie?",
+            reopen: "Znovu otvoriť hlásenie?",
+          }[action],
+          text:
+            action === "hide" || action === "delete"
+              ? "Inzerujúcemu pošleme email s dôvodom. Ostatné otvorené hlásenia k inzerátu sa vybavia."
+              : "",
           note: withNote ? (action === "resolve" ? "Poznámka (interná)" : "Dôvod pre inzerujúceho") : null,
           danger: action === "delete" || action === "hide",
         });
         if (note === false) return;
         await operation(null, async () => {
-          await api("admin/reports/" + b.dataset.report, "POST", { action, note: typeof note === "string" ? note : "" });
+          await api("admin/reports/" + b.dataset.report, "POST", {
+            action,
+            note: typeof note === "string" ? note : "",
+          });
           toast("Hotovo.");
           renderAdmin();
         });
@@ -137,6 +161,7 @@ async function listings() {
     body: `${searchBar("Názov, text, ID inzerátu alebo email inzerenta", [
       ["", "Všetky okrem odstránených"],
       ["active", "Aktívne"],
+      ["expired", "Vypršané"],
       ["sold", "Ukončené"],
       ["hidden", "Skryté"],
       ["deleted", "Odstránené"],
@@ -145,7 +170,7 @@ async function listings() {
         ? r.listings
             .map(
               (d) =>
-                `<article class="manage-row"><a class="manage-photo" href="/inzerat/?id=${d.id}" target="_blank" rel="noopener"><img src="${esc(d.photo)}" alt="" loading="lazy"></a><div class="manage-info"><div class="manage-status"><span class="${d.status === "active" ? "" : "status-closed"}">${listingStatus[d.status]}</span>${d.boost ? '<span class="status-boost">↑ BOOST</span>' : ""}${d.openReports ? `<span class="status-boost">${d.openReports} hlásení</span>` : ""}${d.ownerBanned ? '<span class="status-closed">Inzerent zablokovaný</span>' : ""}<small>#${d.id} · ${d.buy ? "KÚPIM" : "PREDÁM"} · ${d.country.toUpperCase()}</small></div><h3><a href="/inzerat/?id=${d.id}" target="_blank" rel="noopener">${esc(d.title)} ↗</a></h3><p>${esc(d.cat)} · ${esc(d.city)} · ${price(d)} · ${fmtDate(d.createdAt)}</p><p>${esc(d.seller)} · <a href="${adminUrl({ tab: "pouzivatelia", q: d.ownerEmail, filter: "", page: 1, owner: "" })}">${esc(d.ownerEmail)}</a></p>${d.moderationNote ? `<p class="modal-muted">Poznámka: ${esc(d.moderationNote)}</p>` : ""}</div><div class="manage-actions">${
+                `<article class="manage-row"><a class="manage-photo" href="/inzerat/?id=${d.id}" target="_blank" rel="noopener"><img src="${esc(d.thumb || d.photo)}" alt="" loading="lazy"></a><div class="manage-info"><div class="manage-status"><span class="${d.status === "active" ? "" : "status-closed"}">${listingStatus[d.status]}</span>${d.boost ? '<span class="status-boost">TOP</span>' : ""}${d.openReports ? `<span class="status-boost">${d.openReports} hlásení</span>` : ""}${d.ownerBanned ? '<span class="status-closed">Inzerent zablokovaný</span>' : ""}<small>#${d.id} · ${d.buy ? "KÚPIM" : "PREDÁM"} · ${esc(d.catName)} › ${esc(d.subName)}</small></div><h3><a href="/inzerat/?id=${d.id}" target="_blank" rel="noopener">${esc(d.title)} ↗</a></h3><p>${esc(d.city)} ${formatZip(d.zip)} · ${esc(priceLabel(d))} · pridané ${fmtDate(d.createdAt)} · platí do ${fmtDate(d.expires)}</p><p>${esc(d.seller)} · <a href="${adminUrl({ tab: "pouzivatelia", q: d.ownerEmail, filter: "", page: 1, owner: "" })}">${esc(d.ownerEmail)}</a></p>${d.moderationNote ? `<p class="modal-muted">Poznámka: ${esc(d.moderationNote)}</p>` : ""}</div><div class="manage-actions">${
                   d.status === "deleted"
                     ? ""
                     : `${d.status === "hidden" ? `<button type="button" class="outline" data-listing="${d.id}" data-action="restore">Obnoviť</button>` : `<button type="button" class="outline delete-action" data-listing="${d.id}" data-action="hide">Skryť</button>`}${d.boost ? `<button type="button" class="text-button" data-listing="${d.id}" data-action="unboost">Zrušiť Boost</button>` : ""}<button type="button" class="text-button delete-action" data-listing="${d.id}" data-action="delete">Odstrániť</button>`
@@ -161,14 +186,22 @@ async function listings() {
         const action = b.dataset.action,
           withNote = action === "hide" || action === "delete";
         const note = await confirmDialog({
-          title: { hide: "Skryť inzerát?", restore: "Obnoviť inzerát?", delete: "Odstrániť inzerát?", unboost: "Zrušiť Boost?" }[action],
+          title: {
+            hide: "Skryť inzerát?",
+            restore: "Obnoviť inzerát?",
+            delete: "Odstrániť inzerát?",
+            unboost: "Zrušiť Boost?",
+          }[action],
           text: withNote ? "Inzerujúcemu pošleme email s dôvodom." : "",
           note: withNote ? "Dôvod pre inzerujúceho" : null,
           danger: withNote,
         });
         if (note === false) return;
         await operation(null, async () => {
-          await api("admin/listings/" + b.dataset.listing, "POST", { action, note: typeof note === "string" ? note : "" });
+          await api("admin/listings/" + b.dataset.listing, "POST", {
+            action,
+            note: typeof note === "string" ? note : "",
+          });
           toast("Hotovo.");
           renderAdmin();
         });
@@ -215,8 +248,10 @@ async function users() {
           }[action],
           text: {
             ban: "Používateľ sa nebude môcť prihlásiť a jeho inzeráty zmiznú z verejného zobrazenia. Dostane email s dôvodom.",
-            delete: "Vymažú sa kontaktné údaje, inzeráty, fotografie, obľúbené a odoslané správy používateľa. Akciu nemožno vrátiť.",
-            verify: "Používa sa iba vtedy, ak overovací email nemohol byť doručený a totožnosť schránky si overil inak.",
+            delete:
+              "Vymažú sa kontaktné údaje, inzeráty, fotografie, obľúbené a odoslané správy používateľa. Akciu nemožno vrátiť.",
+            verify:
+              "Používa sa iba vtedy, ak overovací email nemohol byť doručený a totožnosť schránky si overil inak.",
           }[action],
           note: action === "ban" ? "Dôvod pre používateľa" : action === "delete" ? "Interná poznámka" : null,
           danger: action === "ban" || action === "delete",
@@ -262,7 +297,13 @@ async function auditLog() {
 async function renderAdmin() {
   const host = $("#adminContent");
   try {
-    const view = await { prehlad: overview, hlasenia: reports, inzeraty: listings, pouzivatelia: users, zaznam: auditLog }[adminState.tab]();
+    const view = await {
+      prehlad: overview,
+      hlasenia: reports,
+      inzeraty: listings,
+      pouzivatelia: users,
+      zaznam: auditLog,
+    }[adminState.tab]();
     host.innerHTML = adminShell(view.body, view.counts);
     view.wire?.();
     $(".admin-tabs").onclick = (e) => {
@@ -290,11 +331,13 @@ async function renderAdmin() {
 }
 window.pageInit = async function () {
   if (!state.user) {
-    $("#adminContent").innerHTML = `<div class="account-guest"><h1>Administrácia</h1><p>Prihlás sa administrátorským účtom.</p><a class="primary" href="${loginUrl()}">Prihlásiť sa ↗</a></div>`;
+    $("#adminContent").innerHTML =
+      `<div class="account-guest"><h1>Administrácia</h1><p>Prihlás sa administrátorským účtom.</p><a class="primary" href="${loginUrl()}">Prihlásiť sa ↗</a></div>`;
     return;
   }
   if (!state.user.admin) {
-    $("#adminContent").innerHTML = `<div class="account-guest"><h1>Administrácia</h1><p>Na túto časť nemáš oprávnenie.</p><a class="primary" href="/">Späť na úvod</a></div>`;
+    $("#adminContent").innerHTML =
+      `<div class="account-guest"><h1>Administrácia</h1><p>Na túto časť nemáš oprávnenie.</p><a class="primary" href="/">Späť na úvod</a></div>`;
     return;
   }
   addEventListener("popstate", () => {

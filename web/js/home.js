@@ -1,33 +1,37 @@
 "use strict";
-async function renderFeatured() {
-  const grid = $("#boostGrid");
-  grid.setAttribute("aria-busy", "true");
-  try {
-    const r = await api("listings/featured?country=" + lang);
-    const latest = r.kind === "latest";
-    $('[data-t="boostLabel"]').textContent = latest ? L("NAJNOVŠIE PONUKY", "NEJNOVĚJŠÍ NABÍDKY") : L("ZVÝRAZNENÉ PONUKY", "ZVÝRAZNĚNÉ NABÍDKY");
-    $('[data-t="boostTitle"]').textContent = latest ? L("Čerstvo pridané.", "Čerstvě přidané.") : L("Objav niečo výnimočné.", "Objev něco výjimečného.");
-    $('[data-t="boostDescription"]').textContent = latest
-      ? L("Najnovšie inzeráty z tvojej krajiny.", "Nejnovější inzeráty z tvé země.")
-      : L("Výber zvýraznených ponúk z celého bazára. Ďalší dobrý nález môže byť práve tu.", "Výběr zvýrazněných nabídek z celého bazaru. Další dobrý nález může být právě tady.");
-    $("#shuffleBoosts").hidden = latest;
-    grid.innerHTML = r.listings.length
-      ? r.listings.map(cardMarkup).join("")
-      : `<div class="account-empty"><h3>${L("Priestor pre tvoju ponuku.", "Prostor pro tvoji nabídku.")}</h3><p>${L("Zatiaľ tu nie sú žiadne inzeráty. Buď prvý.", "Zatím tu nejsou žádné inzeráty. Buď první.")}</p><a class="primary" href="/pridat/">${L("Pridať inzerát", "Přidat inzerát")} ↗</a></div>`;
-  } catch (e) {
-    grid.innerHTML = `<p class="form-error">${esc(e.message)}</p>`;
-  } finally {
-    grid.removeAttribute("aria-busy");
-  }
-}
+// Home page and the category overview.
 window.pageInit = async function () {
-  wireSearchForm();
-  $("#shuffleBoosts").onclick = renderFeatured;
-  $("#addBottom").onclick = (e) => {
-    if (!state.user?.verified) {
+  const board = $("#catBoard");
+  if (page === "categories") board.dataset.full = "1";
+  categoryBoard(board);
+  const heroSearch = $("#heroSearch");
+  if (heroSearch)
+    heroSearch.onsubmit = (e) => {
       e.preventDefault();
-      requireAccount(() => location.assign("/pridat/"));
+      location.assign(listingSearchUrl(heroSearch));
+    };
+  const counts = loadCategoryCounts().then((c) => {
+    categoryBoard(board, c.counts);
+    if ($("#heroStats") && c.total) {
+      $("#statTotal").textContent = new Intl.NumberFormat("sk-SK").format(c.total);
+      $("#statToday").textContent = new Intl.NumberFormat("sk-SK").format(c.today);
+      $("#heroStats").hidden = false;
     }
-  };
-  await renderFeatured();
+    if ($("#catCount"))
+      $("#catCount").textContent =
+        `${c.total} ${plural(c.total, "aktívny inzerát", "aktívne inzeráty", "aktívnych inzerátov")} v ${CATALOG.length} kategóriách.`;
+  });
+  if (page !== "home") return counts;
+  const [top, latest] = await Promise.all([
+    api("listings/featured").catch(() => ({ listings: [] })),
+    api("listings?limit=12").catch((e) => ({ error: e.message, listings: [] })),
+  ]);
+  if (top.listings.length) {
+    $("#topStrip").innerHTML = top.listings.map(cardMarkup).join("");
+    $("#topSection").hidden = false;
+  }
+  $("#latestRows").innerHTML = latest.listings.length
+    ? latest.listings.map(rowMarkup).join("")
+    : `<div class="empty"><h3>${latest.error ? esc(latest.error) : "Zatiaľ tu nie je žiadny inzerát"}</h3><p>Buď prvý – pridanie je zadarmo a zaberie minútu.</p><a class="btn btn-tag" href="/pridat/">${icon("plus")}Pridať inzerát</a></div>`;
+  await counts;
 };

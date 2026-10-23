@@ -8,6 +8,13 @@ window.pageInit = async function () {
     $("#reportName").value = state.user.name;
     $("#reportEmail").value = state.user.email;
   }
+  let captchaToken = () => "";
+  if (!state.user && state.config.turnstile) {
+    const box = document.createElement("div");
+    box.className = "turnstile-box";
+    $("#legalReportForm button.primary").before(box);
+    captcha(box).then((get) => (captchaToken = get));
+  }
   form.onsubmit = (e) => {
     e.preventDefault();
     if (!form.reportValidity()) return;
@@ -29,6 +36,7 @@ window.pageInit = async function () {
           details: $("#reportExplanation").value,
           email: $("#reportEmail").value,
           confirm: $("#reportConfirm").checked,
+          captcha: captchaToken(),
         });
         form.reset();
         $("#legalReportStatus").textContent = "Ďakujeme. Hlásenie je uložené a posúdime ho bez zbytočného odkladu.";

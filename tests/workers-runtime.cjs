@@ -90,11 +90,12 @@ const esbuild = wr("esbuild");
       submission: "native",
       title: "Native bicykel",
       desc: "Bicykel v dobrom stave, osobný odber.",
-      cat: "Šport",
+      cat: "sport",
+      sub: "bicykle",
       price: 150,
+      zip: "81101",
       city: "Bratislava",
       state: "Používané",
-      country: "sk",
       uploadIds: [p1.id, p2.id],
     });
     assert.equal(created.status, 201);
@@ -108,7 +109,7 @@ const esbuild = wr("esbuild");
     assert.equal(await bucket.get(p1.id), null);
     assert(await bucket.get(p2.id));
     assert.equal((await call("listings/" + id, "PATCH", { uploadIds: [] })).status, 400);
-    const found = await mf.dispatchFetch("https://market.test/api/listings?country=sk&q=bicykel&city=bratislava");
+    const found = await mf.dispatchFetch("https://market.test/api/listings?q=bicykel&loc=81101&radius=10");
     assert.equal((await found.json()).total, 1);
     const media = await mf.dispatchFetch("https://market.test/media/" + p2.id);
     assert.equal(media.status, 200);

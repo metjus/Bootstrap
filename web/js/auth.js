@@ -17,19 +17,31 @@ function validEmail(value) {
   );
 }
 function renderSignup(host) {
-  host.innerHTML = `<form class="dialog-form" id="registerForm" novalidate><span class="small-kicker">${L("NOVÝ ÚČET", "NOVÝ ÚČET")}</span><h1 id="dialogTitle">${L("Vitaj na Bazaro.", "Vítej na Bazaro.")}</h1><p class="modal-muted">${L("Na pridávanie inzerátov a kontaktovanie potrebuješ účet s overeným emailom.", "Pro přidávání inzerátů a kontaktování potřebuješ účet s ověřeným emailem.")}</p><label for="registerName">${L("Meno", "Jméno")} *</label><input id="registerName" required minlength="2" maxlength="80" autocomplete="name" aria-describedby="nameError"><p class="field-error" id="nameError"></p><label for="registerEmail">Email *</label><input id="registerEmail" type="email" required maxlength="254" autocomplete="email" aria-describedby="emailError"><p class="field-error" id="emailError"></p><label for="registerPassword">${L("Heslo", "Heslo")} *</label><input id="registerPassword" type="password" required minlength="12" maxlength="128" autocomplete="new-password" aria-describedby="passwordHint passwordError"><p class="field-hint" id="passwordHint">${L("Aspoň 12 znakov. Odporúčame vetu alebo správcu hesiel.", "Alespoň 12 znaků. Doporučujeme větu nebo správce hesel.")}</p><p class="field-error" id="passwordError"></p><label for="registerRepeat">${L("Heslo znovu", "Heslo znovu")} *</label><input id="registerRepeat" type="password" required minlength="12" maxlength="128" autocomplete="new-password" aria-describedby="repeatError"><p class="field-error" id="repeatError"></p><label class="checkbox-row" for="registerTerms"><input id="registerTerms" type="checkbox" required><span>${L("Súhlasím s", "Souhlasím s")} <a href="/podmienky/" target="_blank" rel="noopener">${L("podmienkami používania", "podmínkami používání")}</a> ${L("a beriem na vedomie", "a beru na vědomí")} <a href="/ochrana-udajov/" target="_blank" rel="noopener">${L("zásady ochrany osobných údajov", "zásady ochrany osobních údajů")}</a>. *</span></label><p class="field-error" id="termsError"></p>${state.config.email ? "" : `<div class="notice">${L("Registrácia bude dostupná po nastavení odosielania emailov.", "Registrace bude dostupná po nastavení odesílání emailů.")}</div>`}<p class="field-error" id="registerError" role="alert"></p><button class="primary" id="registerSubmit">${L("Vytvoriť účet", "Vytvořit účet")}</button><p class="auth-switch">${L("Už máš účet?", "Už máš účet?")} <a href="/prihlasenie/">${L("Prihlás sa", "Přihlas se")} ↗</a></p></form>`;
+  host.innerHTML = `<form class="dialog-form" id="registerForm" novalidate><span class="small-kicker">NOVÝ ÚČET</span><h1 id="dialogTitle">Vitaj na ${esc(SITE)}.</h1><p class="modal-muted">Na pridávanie inzerátov a kontaktovanie potrebuješ účet s overeným emailom.</p><label for="registerName">Meno *</label><input id="registerName" required minlength="2" maxlength="80" autocomplete="name" aria-describedby="nameError"><p class="field-error" id="nameError"></p><label for="registerEmail">Email *</label><input id="registerEmail" type="email" required maxlength="254" autocomplete="email" aria-describedby="emailError"><p class="field-error" id="emailError"></p><label for="registerPassword">Heslo *</label><input id="registerPassword" type="password" required minlength="12" maxlength="128" autocomplete="new-password" aria-describedby="passwordHint passwordError"><p class="field-hint" id="passwordHint">Aspoň 12 znakov. Odporúčame vetu alebo správcu hesiel.</p><p class="field-error" id="passwordError"></p><label for="registerRepeat">Heslo znovu *</label><input id="registerRepeat" type="password" required minlength="12" maxlength="128" autocomplete="new-password" aria-describedby="repeatError"><p class="field-error" id="repeatError"></p><label class="checkbox-row" for="registerTerms"><input id="registerTerms" type="checkbox" required><span>Súhlasím s <a href="/podmienky/" target="_blank" rel="noopener">podmienkami používania</a> a beriem na vedomie <a href="/ochrana-udajov/" target="_blank" rel="noopener">zásady ochrany osobných údajov</a>. *</span></label><p class="field-error" id="termsError"></p>${state.config.email ? "" : `<div class="notice">Registrácia bude dostupná po nastavení odosielania emailov.</div>`}<div class="turnstile-box" id="captchaBox"></div><p class="field-error" id="registerError" role="alert"></p><button class="primary" id="registerSubmit">Vytvoriť účet</button><p class="auth-switch">Už máš účet? <a href="/prihlasenie/">Prihlás sa ↗</a></p></form>`;
   const field = (id) => $("#" + id);
+  let captchaToken = () => "";
+  if (state.config.turnstile)
+    captcha($("#captchaBox"))
+      .then((get) => (captchaToken = get))
+      .catch((e) => ($("#registerError").textContent = e.message));
+  else $("#captchaBox").remove();
   function validate() {
     const errors = {
-      name: field("registerName").value.trim().length < 2 ? L("Zadaj meno s aspoň 2 znakmi.", "Zadej jméno s alespoň 2 znaky.") : "",
-      email: validEmail(field("registerEmail").value) ? "" : L("Zadaj platný email, napr. meno@domena.sk.", "Zadej platný email, např. jmeno@domena.cz."),
-      password: field("registerPassword").value.length < 12 ? L("Heslo musí mať aspoň 12 znakov.", "Heslo musí mít alespoň 12 znaků.") : "",
-      repeat: field("registerRepeat").value !== field("registerPassword").value ? L("Heslá sa nezhodujú.", "Hesla se neshodují.") : "",
-      terms: field("registerTerms").checked ? "" : L("Na vytvorenie účtu potvrď podmienky.", "Pro vytvoření účtu potvrď podmínky."),
+      name: field("registerName").value.trim().length < 2 ? "Zadaj meno s aspoň 2 znakmi." : "",
+      email: validEmail(field("registerEmail").value) ? "" : "Zadaj platný email, napr. meno@domena.sk.",
+      password: field("registerPassword").value.length < 12 ? "Heslo musí mať aspoň 12 znakov." : "",
+      repeat: field("registerRepeat").value !== field("registerPassword").value ? "Heslá sa nezhodujú." : "",
+      terms: field("registerTerms").checked ? "" : "Na vytvorenie účtu potvrď podmienky.",
     };
     for (const [key, msg] of Object.entries(errors)) {
       $("#" + key + "Error").textContent = msg;
-      const input = { name: "registerName", email: "registerEmail", password: "registerPassword", repeat: "registerRepeat", terms: "registerTerms" }[key];
+      const input = {
+        name: "registerName",
+        email: "registerEmail",
+        password: "registerPassword",
+        repeat: "registerRepeat",
+        terms: "registerTerms",
+      }[key];
       field(input).setAttribute("aria-invalid", String(!!msg));
     }
     return errors;
@@ -40,7 +52,15 @@ function renderSignup(host) {
     const errors = validate(),
       first = Object.keys(errors).find((k) => errors[k]);
     if (first) {
-      field({ name: "registerName", email: "registerEmail", password: "registerPassword", repeat: "registerRepeat", terms: "registerTerms" }[first]).focus();
+      field(
+        {
+          name: "registerName",
+          email: "registerEmail",
+          password: "registerPassword",
+          repeat: "registerRepeat",
+          terms: "registerTerms",
+        }[first],
+      ).focus();
       return;
     }
     operation(
@@ -52,8 +72,9 @@ function renderSignup(host) {
           password: field("registerPassword").value,
           repeat: field("registerRepeat").value,
           terms: true,
+          captcha: captchaToken(),
         });
-        host.innerHTML = `<div class="dialog-form"><span class="small-kicker">${L("POSLEDNÝ KROK", "POSLEDNÍ KROK")}</span><h1>${L("Skontroluj email.", "Zkontroluj email.")}</h1><p>${esc(r.message)}</p><p class="modal-muted">${L("Odkaz platí 24 hodín. Po potvrdení sa prihlás.", "Odkaz platí 24 hodin. Po potvrzení se přihlas.")}</p><a href="/prihlasenie/" class="primary">${L("Prihlásiť sa", "Přihlásit se")}</a></div>`;
+        host.innerHTML = `<div class="dialog-form"><span class="small-kicker">POSLEDNÝ KROK</span><h1>Skontroluj email.</h1><p>${esc(r.message)}</p><p class="modal-muted">Odkaz platí 24 hodín. Po potvrdení sa prihlás.</p><a href="/prihlasenie/" class="primary">Prihlásiť sa</a></div>`;
       },
       $("#registerError"),
     );
@@ -63,24 +84,29 @@ function renderAction(host, mode) {
   const token = new URLSearchParams(location.hash.slice(1)).get("token") || "";
   if (token) history.replaceState(null, "", location.pathname);
   const titles = {
-    verify: L("Potvrdenie emailu", "Potvrzení emailu"),
-    forgot: L("Obnov prístup.", "Obnov přístup."),
-    reset: L("Nové heslo.", "Nové heslo."),
+    verify: "Potvrdenie emailu",
+    forgot: "Obnov prístup.",
+    reset: "Nové heslo.",
   };
   let fields = "";
   if (mode === "forgot")
-    fields = `<p class="modal-muted">${L("Pošleme ti odkaz na nastavenie nového hesla.", "Pošleme ti odkaz na nastavení nového hesla.")}</p><label for="actionEmail">Email</label><input id="actionEmail" type="email" required autocomplete="email" maxlength="254">`;
+    fields = `<p class="modal-muted">Pošleme ti odkaz na nastavenie nového hesla.</p><label for="actionEmail">Email</label><input id="actionEmail" type="email" required autocomplete="email" maxlength="254">`;
   if (mode === "reset")
-    fields = `<label for="actionPassword">${L("Nové heslo (aspoň 12 znakov)", "Nové heslo (alespoň 12 znaků)")}</label><input id="actionPassword" type="password" minlength="12" maxlength="128" required autocomplete="new-password"><label for="actionRepeat">${L("Heslo znovu", "Heslo znovu")}</label><input id="actionRepeat" type="password" minlength="12" maxlength="128" required autocomplete="new-password">`;
+    fields = `<label for="actionPassword">Nové heslo (aspoň 12 znakov)</label><input id="actionPassword" type="password" minlength="12" maxlength="128" required autocomplete="new-password"><label for="actionRepeat">Heslo znovu</label><input id="actionRepeat" type="password" minlength="12" maxlength="128" required autocomplete="new-password">`;
   if ((mode === "verify" || mode === "reset") && !token) {
-    host.innerHTML = `<div class="dialog-form"><h1>${titles[mode]}</h1><p>${L("Odkaz je neúplný. Otvor ho priamo z emailu alebo si nechaj poslať nový.", "Odkaz je neúplný. Otevři ho přímo z emailu nebo si nech poslat nový.")}</p><a class="primary" href="${mode === "reset" ? "/zabudnute-heslo/" : "/prihlasenie/"}">${mode === "reset" ? L("Poslať nový odkaz", "Poslat nový odkaz") : L("Prihlásiť sa", "Přihlásit se")}</a></div>`;
+    host.innerHTML = `<div class="dialog-form"><h1>${titles[mode]}</h1><p>Odkaz je neúplný. Otvor ho priamo z emailu alebo si nechaj poslať nový.</p><a class="primary" href="${mode === "reset" ? "/zabudnute-heslo/" : "/prihlasenie/"}">${mode === "reset" ? "Poslať nový odkaz" : "Prihlásiť sa"}</a></div>`;
     return;
   }
-  host.innerHTML = `<form class="dialog-form" id="authActionForm"><h1>${titles[mode]}</h1>${fields}<p id="authActionStatus" role="status"></p><button class="primary" id="actionSubmit">${mode === "verify" ? L("Potvrdiť email", "Potvrdit email") : mode === "forgot" ? L("Poslať odkaz", "Poslat odkaz") : L("Uložiť heslo", "Uložit heslo")}</button><p class="auth-switch"><a href="/prihlasenie/">${L("Prihlásiť sa", "Přihlásit se")} ↗</a></p></form>`;
+  host.innerHTML = `<form class="dialog-form" id="authActionForm"><h1>${titles[mode]}</h1>${fields}${mode === "forgot" ? '<div class="turnstile-box" id="captchaBox"></div>' : ""}<p id="authActionStatus" role="status"></p><button class="primary" id="actionSubmit">${mode === "verify" ? "Potvrdiť email" : mode === "forgot" ? "Poslať odkaz" : "Uložiť heslo"}</button><p class="auth-switch"><a href="/prihlasenie/">Prihlásiť sa ↗</a></p></form>`;
+  let captchaToken = () => "";
+  if ($("#captchaBox")) {
+    if (state.config.turnstile) captcha($("#captchaBox")).then((get) => (captchaToken = get));
+    else $("#captchaBox").remove();
+  }
   $("#authActionForm").onsubmit = (e) => {
     e.preventDefault();
     if (mode === "reset" && $("#actionPassword").value !== $("#actionRepeat").value) {
-      $("#authActionStatus").textContent = L("Heslá sa nezhodujú.", "Hesla se neshodují.");
+      $("#authActionStatus").textContent = "Heslá sa nezhodujú.";
       return;
     }
     operation(
@@ -91,8 +117,9 @@ function renderAction(host, mode) {
           email: $("#actionEmail")?.value.trim(),
           password: $("#actionPassword")?.value,
           repeat: $("#actionRepeat")?.value,
+          captcha: captchaToken(),
         });
-        host.innerHTML = `<div class="dialog-form"><span class="success-mark" aria-hidden="true">✓</span><h1>${esc(r.message)}</h1>${mode === "forgot" ? `<p class="modal-muted">${L("Odkaz platí 1 hodinu. Skontroluj aj spam.", "Odkaz platí 1 hodinu. Zkontroluj i spam.")}</p>` : `<a class="primary" href="${state.user ? "/ucet/" : "/prihlasenie/"}">${state.user ? L("Môj účet", "Můj účet") : L("Prihlásiť sa", "Přihlásit se")}</a>`}</div>`;
+        host.innerHTML = `<div class="dialog-form"><span class="success-mark" aria-hidden="true">✓</span><h1>${esc(r.message)}</h1>${mode === "forgot" ? `<p class="modal-muted">Odkaz platí 1 hodinu. Skontroluj aj spam.</p>` : `<a class="primary" href="${state.user ? "/ucet/" : "/prihlasenie/"}">${state.user ? "Môj účet" : "Prihlásiť sa"}</a>`}</div>`;
       },
       $("#authActionStatus"),
     );

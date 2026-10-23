@@ -1,48 +1,61 @@
 "use strict";
-const accountTab = ["inzeraty", "oblubene", "nastavenia"].includes(params.get("sekcia")) ? params.get("sekcia") : "inzeraty";
+const accountTab = ["inzeraty", "oblubene", "nastavenia"].includes(params.get("sekcia"))
+  ? params.get("sekcia")
+  : "inzeraty";
 let accountFilter = "all",
   accountPage = 1,
   ownCache = [];
 function statusLabel(d) {
-  if (d.status === "hidden") return `<span class="status-closed">${L("Skryté moderátorom", "Skryto moderátorem")}</span>`;
-  if (d.status === "sold")
-    return `<span class="status-closed">✓ ${d.buy ? L("Ukončený dopyt", "Ukončená poptávka") : L("Predané", "Prodáno")}</span>`;
-  return `<span>${L("Aktívny", "Aktivní")}</span>`;
+  if (d.status === "hidden") return '<span class="status-closed">Skryté moderátorom</span>';
+  if (d.status === "expired") return '<span class="status-expired">Vypršal</span>';
+  if (d.status === "sold") return `<span class="status-closed">✓ ${d.buy ? "Ukončený dopyt" : "Predané"}</span>`;
+  return "<span>Aktívny</span>";
 }
 function managementRow(d) {
   const closed = d.status === "sold",
-    hidden = d.status === "hidden";
-  return `<article class="manage-row"><a class="manage-photo" href="/inzerat/?id=${d.id}"><img src="${esc(d.photo)}" alt="${esc(d.title)}" loading="lazy"></a><div class="manage-info"><div class="manage-status">${statusLabel(d)}${d.boost ? '<span class="status-boost">↑ BOOST</span>' : ""}<small>${d.buy ? L("KÚPIM", "KOUPÍM") : L("PREDÁM", "PRODÁM")}</small></div><h3><a href="/inzerat/?id=${d.id}">${esc(d.title)} ↗</a></h3><p>${esc(catName(d.cat))} · ${esc(d.city)} · ◉ ${d.viewCount ?? 0} · ${fmtDate(d.createdAt)}</p><strong>${price(d)}</strong>${d.boost ? `<p class="boost-expiry">Boost ${L("do", "do")} ${fmtDate(d.boostUntil)}</p>` : ""}${hidden && d.moderationNote ? `<p class="field-error">${L("Dôvod", "Důvod")}: ${esc(d.moderationNote)}</p>` : ""}</div><div class="manage-actions">${hidden ? "" : `<button type="button" class="outline" data-manage="edit" data-id="${d.id}">${L("Upraviť", "Upravit")}</button>${closed ? "" : `<button type="button" class="outline boost-action" data-manage="boost" data-id="${d.id}">↑ ${d.boost ? L("Spravovať Boost", "Spravovat Boost") : "Boost"}</button>`}<button type="button" class="text-button" data-manage="status" data-id="${d.id}">${closed ? L("Znovu aktivovať", "Znovu aktivovat") : d.buy ? L("Ukončiť dopyt", "Ukončit poptávku") : L("Označiť ako predané", "Označit jako prodané")}</button>`}<button type="button" class="text-button delete-action" data-manage="delete" data-id="${d.id}">${L("Odstrániť", "Odstranit")}</button></div></article>`;
+    hidden = d.status === "hidden",
+    daysLeft = Math.ceil((d.expires - Date.now()) / 86400000);
+  return `<article class="manage-row"><a class="manage-photo" href="/inzerat/?id=${d.id}"><img src="${esc(d.thumb || d.photo)}" alt="" loading="lazy"></a><div class="manage-info"><div class="manage-status">${statusLabel(d)}${d.boost ? '<span class="status-boost">TOP</span>' : ""}<small>${d.buy ? "KÚPIM" : "PREDÁM"} · ${esc(d.subName)}</small></div><h3><a href="/inzerat/?id=${d.id}">${esc(d.title)}</a></h3><p>${esc(d.city)} · ${icon("eye", "icon")} ${d.viewCount ?? 0} · pridané ${fmtDate(d.createdAt)}</p><p>${d.status === "active" ? `Platí ešte ${daysLeft} ${plural(daysLeft, "deň", "dni", "dní")} (do ${fmtDate(d.expires)})` : d.status === "expired" ? `Vypršal ${fmtDate(d.expires)}` : ""}${d.boost ? ` · TOP do ${fmtDate(d.boostUntil)}` : ""}</p><div>${priceTag(d)}</div>${hidden && d.moderationNote ? `<p class="field-error">Dôvod: ${esc(d.moderationNote)}</p>` : ""}</div><div class="manage-actions">${d.renewable ? `<button type="button" class="btn btn-tag" data-manage="renew" data-id="${d.id}">Predĺžiť o 60 dní</button>` : ""}${hidden ? "" : `<button type="button" class="outline" data-manage="edit" data-id="${d.id}">Upraviť</button>${closed || d.status === "expired" ? "" : `<button type="button" class="outline" data-manage="boost" data-id="${d.id}">${d.boost ? "Spravovať TOP" : "Zvýrazniť (TOP)"}</button>`}${d.status === "expired" ? "" : `<button type="button" class="text-button" data-manage="status" data-id="${d.id}">${closed ? "Znovu aktivovať" : d.buy ? "Ukončiť dopyt" : "Označiť ako predané"}</button>`}`}<button type="button" class="text-button delete-action" data-manage="delete" data-id="${d.id}">Odstrániť</button></div></article>`;
 }
 function accountShell(counts) {
   const u = state.user,
     total = Object.values(counts || {}).reduce((a, b) => a + b, 0);
-  return `<div class="account-heading"><div><span class="small-kicker">${L("MÔJ ÚČET", "MŮJ ÚČET")}</span><h1>${L("Ahoj", "Ahoj")}, ${esc(u.name)}<span>.</span></h1><p>${L("Tvoje ponuky, dobré nálezy a nastavenia.", "Tvoje nabídky, dobré nálezy a nastavení.")}</p></div><a class="primary" href="/pridat/" id="accountAdd">＋ ${L("Pridať inzerát", "Přidat inzerát")}</a></div><div class="account-layout"><aside class="account-sidebar"><div class="profile-summary"><span class="profile-avatar" aria-hidden="true">${esc(u.name.trim().charAt(0).toUpperCase())}</span><strong>${esc(u.name)}</strong><span class="profile-email">${esc(u.email)}</span><small>${u.verified ? L("✓ Email overený", "✓ Email ověřený") : L("Email čaká na overenie", "Email čeká na ověření")}</small></div><nav aria-label="${L("Menu účtu", "Menu účtu")}">${[
-    ["inzeraty", L("Moje inzeráty", "Moje inzeráty"), counts ? total : ""],
-    ["oblubene", L("Obľúbené", "Oblíbené"), state.favorites.size],
-    ["nastavenia", L("Nastavenia", "Nastavení"), ""],
+  return `<div class="account-heading"><div><span class="small-kicker">MÔJ ÚČET</span><h1>Ahoj, ${esc(u.name)}<span>.</span></h1><p>Tvoje ponuky, dobré nálezy a nastavenia.</p></div><a class="primary" href="/pridat/" id="accountAdd">＋ Pridať inzerát</a></div><div class="account-layout"><aside class="account-sidebar"><div class="profile-summary"><span class="profile-avatar" aria-hidden="true">${esc(u.name.trim().charAt(0).toUpperCase())}</span><strong>${esc(u.name)}</strong><span class="profile-email">${esc(u.email)}</span><small>${u.verified ? "✓ Email overený" : "Email čaká na overenie"}</small></div><nav aria-label="Menu účtu">${[
+    ["inzeraty", "Moje inzeráty", counts ? total : ""],
+    ["oblubene", "Obľúbené", state.favorites.size],
+    ["nastavenia", "Nastavenia", ""],
   ]
-    .map(([key, label, count]) => `<a href="/ucet/?sekcia=${key}"${accountTab === key ? ' class="active" aria-current="page"' : ""}>${label} <span>${count}</span></a>`)
-    .join("")}${u.verified ? `<a href="/spravy/">${L("Správy", "Zprávy")}${state.unread ? ` <span>${state.unread}</span>` : " ↗"}</a>` : ""}${u.admin ? '<a href="/administracia/">Administrácia ↗</a>' : ""}</nav><button type="button" class="text-button" id="accountLogout">${L("Odhlásiť sa", "Odhlásit se")} ↗</button></aside><section class="account-workspace" id="workspace"><p role="status" class="loading-line">${L("Načítavam…", "Načítám…")}</p></section></div>`;
+    .map(
+      ([key, label, count]) =>
+        `<a href="/ucet/?sekcia=${key}"${accountTab === key ? ' class="active" aria-current="page"' : ""}>${label} <span>${count}</span></a>`,
+    )
+    .join(
+      "",
+    )}${u.verified ? `<a href="/spravy/">Správy${state.unread ? ` <span>${state.unread}</span>` : " ↗"}</a>` : ""}${u.admin ? '<a href="/administracia/">Administrácia ↗</a>' : ""}</nav><button type="button" class="text-button" id="accountLogout">Odhlásiť sa ↗</button></aside><section class="account-workspace" id="workspace"><p role="status" class="loading-line">Načítavam…</p></section></div>`;
 }
 async function renderOwn() {
   const r = await api(`me/listings?status=${accountFilter === "all" ? "" : accountFilter}&page=${accountPage}`),
     counts = r.counts,
-    total = (counts.active || 0) + (counts.sold || 0) + (counts.hidden || 0);
+    total = (counts.active || 0) + (counts.expired || 0) + (counts.sold || 0) + (counts.hidden || 0);
   ownCache = r.listings;
   $("#accountContent").innerHTML = accountShell(counts);
-  $("#workspace").innerHTML = `${!state.user.verified ? `<div class="notice">${L("Na pridávanie inzerátov potvrď svoj email.", "Pro přidávání inzerátů potvrď svůj email.")} <button type="button" class="text-button" id="verifyAgain">${L("Poslať odkaz znova", "Poslat odkaz znovu")}</button></div>` : ""}<div class="workspace-heading"><h2>${L("Moje inzeráty", "Moje inzeráty")}</h2><span>${total} ${L("celkom", "celkem")}</span></div><div class="manage-filters" aria-label="${L("Stav inzerátov", "Stav inzerátů")}">${[
-    ["all", L("Všetky", "Všechny"), total],
-    ["active", L("Aktívne", "Aktivní"), counts.active || 0],
-    ["sold", L("Ukončené", "Ukončené"), counts.sold || 0],
-    ...(counts.hidden ? [["hidden", L("Skryté", "Skryté"), counts.hidden]] : []),
-  ]
-    .map(([key, label, n]) => `<button type="button" data-account-filter="${key}" aria-pressed="${accountFilter === key}" class="${accountFilter === key ? "active" : ""}">${label} <span>${n}</span></button>`)
-    .join("")}</div>${
-    r.listings.length
-      ? r.listings.map(managementRow).join("")
-      : `<div class="account-empty"><span aria-hidden="true">↗</span><h3>${total ? L("V tomto výbere zatiaľ nič nie je.", "V tomto výběru zatím nic není.") : L("Tvoj prvý inzerát začína tu.", "Tvůj první inzerát začíná tady.")}</h3><p>${L("Pridanie je zadarmo. Stačí pár údajov a dobré fotografie.", "Přidání je zdarma. Stačí pár údajů a dobré fotografie.")}</p><a class="primary" href="/pridat/">${L("Pridať inzerát", "Přidat inzerát")}</a></div>`
-  }<nav class="pager" aria-label="${L("Stránkovanie", "Stránkování")}">${pagerMarkup(r.page, r.pages)}</nav>`;
+  $("#workspace").innerHTML =
+    `${!state.user.verified ? `<div class="notice">Na pridávanie inzerátov potvrď svoj email. <button type="button" class="text-button" id="verifyAgain">Poslať odkaz znova</button></div>` : ""}<div class="workspace-heading"><h2>Moje inzeráty</h2><span>${total} celkom</span></div><div class="manage-filters" aria-label="Stav inzerátov">${[
+      ["all", "Všetky", total],
+      ["active", "Aktívne", counts.active || 0],
+      ...(counts.expired ? [["expired", "Vypršané", counts.expired]] : []),
+      ["sold", "Ukončené", counts.sold || 0],
+      ...(counts.hidden ? [["hidden", "Skryté", counts.hidden]] : []),
+    ]
+      .map(
+        ([key, label, n]) =>
+          `<button type="button" data-account-filter="${key}" aria-pressed="${accountFilter === key}" class="${accountFilter === key ? "active" : ""}">${label} <span>${n}</span></button>`,
+      )
+      .join("")}</div>${
+      r.listings.length
+        ? r.listings.map(managementRow).join("")
+        : `<div class="account-empty"><span aria-hidden="true">↗</span><h3>${total ? "V tomto výbere zatiaľ nič nie je." : "Tvoj prvý inzerát začína tu."}</h3><p>Pridanie je zadarmo. Stačí pár údajov a dobré fotografie.</p><a class="primary" href="/pridat/">Pridať inzerát</a></div>`
+    }<nav class="pager" aria-label="Stránkovanie">${pagerMarkup(r.page, r.pages)}</nav>`;
   $("#workspace").onclick = (e) => {
     const filter = e.target.closest("[data-account-filter]");
     if (filter) {
@@ -63,11 +76,12 @@ async function renderOwn() {
 async function renderFavorites() {
   $("#accountContent").innerHTML = accountShell(null);
   const r = await api("me/favorites?page=" + accountPage);
-  $("#workspace").innerHTML = `<div class="workspace-heading"><h2>${L("Obľúbené nálezy", "Oblíbené nálezy")}</h2><span>${r.total}</span></div><p class="workspace-description">${L("Ponuky aj dopyty, ktoré si chceš pozrieť neskôr.", "Nabídky i poptávky, které si chceš prohlédnout později.")}</p>${
-    r.listings.length
-      ? `<div class="grid account-favorites">${r.listings.map((d) => `<div>${d.status === "sold" ? `<p class="saved-closed">${L("Inzerát je ukončený", "Inzerát je ukončený")}</p>` : ""}${cardMarkup(d)}</div>`).join("")}</div>`
-      : `<div class="account-empty"><span aria-hidden="true">♡</span><h3>${L("Dobrý nález si zaslúži srdiečko.", "Dobrý nález si zaslouží srdíčko.")}</h3><p>${L("Klikni na srdiečko pri inzeráte a nájdeš ho tu.", "Klikni na srdíčko u inzerátu a najdeš ho tady.")}</p><a class="outline" href="/kategorie/">${L("Prehliadať kategórie", "Procházet kategorie")} ↗</a></div>`
-  }<nav class="pager" aria-label="${L("Stránkovanie", "Stránkování")}">${pagerMarkup(r.page, r.pages)}</nav>`;
+  $("#workspace").innerHTML =
+    `<div class="workspace-heading"><h2>Obľúbené nálezy</h2><span>${r.total}</span></div><p class="workspace-description">Ponuky aj dopyty, ktoré si chceš pozrieť neskôr.</p>${
+      r.listings.length
+        ? `<div class="grid account-favorites">${r.listings.map((d) => `<div>${d.status === "sold" ? `<p class="saved-closed">Inzerát je ukončený</p>` : ""}${cardMarkup(d)}</div>`).join("")}</div>`
+        : `<div class="account-empty"><span aria-hidden="true">♡</span><h3>Dobrý nález si zaslúži srdiečko.</h3><p>Klikni na srdiečko pri inzeráte a nájdeš ho tu.</p><a class="outline" href="/kategorie/">Prehliadať kategórie ↗</a></div>`
+    }<nav class="pager" aria-label="Stránkovanie">${pagerMarkup(r.page, r.pages)}</nav>`;
   $("#workspace").onclick = (e) => {
     const b = e.target.closest("[data-page]");
     if (b && !b.disabled) {
@@ -79,11 +93,12 @@ async function renderFavorites() {
 function renderSettings() {
   const u = state.user;
   $("#accountContent").innerHTML = accountShell(null);
-  $("#workspace").innerHTML = `<div class="workspace-heading"><h2>${L("Profil", "Profil")}</h2></div><form class="dialog-form profile-form" id="profileForm"><label for="profileName">${L("Meno", "Jméno")} *</label><input id="profileName" value="${esc(u.name)}" required minlength="2" maxlength="80" autocomplete="name"><label for="profilePhone">${L("Telefón (nepovinné)", "Telefon (nepovinné)")}</label><input id="profilePhone" type="tel" value="${esc(u.phone)}" maxlength="30" autocomplete="tel"><p class="field-hint">${L("Predvyplní sa pri novom inzeráte. Existujúce inzeráty upravíš samostatne.", "Předvyplní se u nového inzerátu. Existující inzeráty upravíš samostatně.")}</p><label class="checkbox-row"><input type="checkbox" id="profileNotifications"${u.notifications ? " checked" : ""}><span>${L("Posielať email pri novej správe", "Posílat email při nové zprávě")}</span></label><button class="primary" id="profileSave">${L("Uložiť profil", "Uložit profil")}</button><p id="profileStatus" role="status"></p></form>
-<div class="workspace-heading settings-heading"><h2>Email</h2></div><form class="dialog-form profile-form" id="emailForm"><p class="field-hint">${L("Súčasný email", "Současný email")}: <strong>${esc(u.email)}</strong>. ${L("Nový email začne platiť po potvrdení odkazu, ktorý naň pošleme.", "Nový email začne platit po potvrzení odkazu, který na něj pošleme.")}</p><label for="newEmail">${L("Nový email", "Nový email")}</label><input id="newEmail" type="email" required maxlength="254" autocomplete="email"><label for="emailPassword">${L("Heslo na potvrdenie", "Heslo pro potvrzení")}</label><input id="emailPassword" type="password" required autocomplete="current-password" maxlength="128"><button class="outline" id="emailSave">${L("Zmeniť email", "Změnit email")}</button><p id="emailStatus" role="status"></p></form>
-<div class="workspace-heading settings-heading"><h2>${L("Heslo", "Heslo")}</h2></div><form class="dialog-form profile-form" id="passwordForm"><label for="currentPassword">${L("Súčasné heslo", "Současné heslo")}</label><input id="currentPassword" type="password" required autocomplete="current-password" maxlength="128"><label for="newPassword">${L("Nové heslo (aspoň 12 znakov)", "Nové heslo (alespoň 12 znaků)")}</label><input id="newPassword" type="password" required minlength="12" maxlength="128" autocomplete="new-password"><label for="repeatPassword">${L("Nové heslo znovu", "Nové heslo znovu")}</label><input id="repeatPassword" type="password" required minlength="12" maxlength="128" autocomplete="new-password"><button class="outline" id="passwordSave">${L("Zmeniť heslo", "Změnit heslo")}</button><p id="passwordStatus" role="status"></p></form>
-<div class="profile-privacy"><h3>${L("Súkromie a údaje", "Soukromí a údaje")}</h3><p>${L("Stiahni si kópiu svojich údajov alebo uprav súhlas s voliteľným ukladaním.", "Stáhni si kopii svých údajů nebo uprav souhlas s volitelným ukládáním.")}</p><a class="outline" href="/api/account/export" download>${L("Stiahnuť moje údaje", "Stáhnout moje údaje")}</a> <button type="button" class="outline" id="profileCookies">${L("Nastavenia cookies", "Nastavení cookies")}</button> <a href="/ochrana-udajov/">${L("Ochrana osobných údajov", "Ochrana osobních údajů")} ↗</a></div>
-<div class="profile-privacy danger-zone"><h3>${L("Odstránenie účtu", "Odstranění účtu")}</h3><p>${L("Vymažú sa tvoje kontaktné údaje, inzeráty, fotografie, obľúbené a odoslané správy. Túto akciu nemožno vrátiť.", "Vymažou se tvoje kontaktní údaje, inzeráty, fotografie, oblíbené a odeslané zprávy. Tuto akci nelze vrátit.")}</p><button type="button" class="outline delete-action" id="deleteAccount">${L("Odstrániť účet", "Odstranit účet")}</button></div>`;
+  $("#workspace").innerHTML =
+    `<div class="workspace-heading"><h2>Profil</h2></div><form class="dialog-form profile-form" id="profileForm"><label for="profileName">Meno *</label><input id="profileName" value="${esc(u.name)}" required minlength="2" maxlength="80" autocomplete="name"><label for="profilePhone">Telefón (nepovinné)</label><input id="profilePhone" type="tel" value="${esc(u.phone)}" maxlength="30" autocomplete="tel"><p class="field-hint">Predvyplní sa pri novom inzeráte. Existujúce inzeráty upravíš samostatne.</p><label class="checkbox-row"><input type="checkbox" id="profileNotifications"${u.notifications ? " checked" : ""}><span>Posielať email pri novej správe</span></label><button class="primary" id="profileSave">Uložiť profil</button><p id="profileStatus" role="status"></p></form>
+<div class="workspace-heading settings-heading"><h2>Email</h2></div><form class="dialog-form profile-form" id="emailForm"><p class="field-hint">Súčasný email: <strong>${esc(u.email)}</strong>. Nový email začne platiť po potvrdení odkazu, ktorý naň pošleme.</p><label for="newEmail">Nový email</label><input id="newEmail" type="email" required maxlength="254" autocomplete="email"><label for="emailPassword">Heslo na potvrdenie</label><input id="emailPassword" type="password" required autocomplete="current-password" maxlength="128"><button class="outline" id="emailSave">Zmeniť email</button><p id="emailStatus" role="status"></p></form>
+<div class="workspace-heading settings-heading"><h2>Heslo</h2></div><form class="dialog-form profile-form" id="passwordForm"><label for="currentPassword">Súčasné heslo</label><input id="currentPassword" type="password" required autocomplete="current-password" maxlength="128"><label for="newPassword">Nové heslo (aspoň 12 znakov)</label><input id="newPassword" type="password" required minlength="12" maxlength="128" autocomplete="new-password"><label for="repeatPassword">Nové heslo znovu</label><input id="repeatPassword" type="password" required minlength="12" maxlength="128" autocomplete="new-password"><button class="outline" id="passwordSave">Zmeniť heslo</button><p id="passwordStatus" role="status"></p></form>
+<div class="profile-privacy"><h3>Súkromie a údaje</h3><p>Stiahni si kópiu svojich údajov alebo uprav súhlas s voliteľným ukladaním.</p><a class="outline" href="/api/account/export" download>Stiahnuť moje údaje</a> <button type="button" class="outline" id="profileCookies">Nastavenia cookies</button> <a href="/ochrana-udajov/">Ochrana osobných údajov ↗</a></div>
+<div class="profile-privacy danger-zone"><h3>Odstránenie účtu</h3><p>Vymažú sa tvoje kontaktné údaje, inzeráty, fotografie, obľúbené a odoslané správy. Túto akciu nemožno vrátiť.</p><button type="button" class="outline delete-action" id="deleteAccount">Odstrániť účet</button></div>`;
   $("#profileCookies").onclick = openPrivacySettings;
   $("#profileForm").onsubmit = (e) => {
     e.preventDefault();
@@ -101,7 +116,7 @@ function renderSettings() {
           notifications: $("#profileNotifications").checked,
         });
         updateHeader();
-        $("#profileStatus").textContent = L("Profil je uložený.", "Profil je uložený.");
+        $("#profileStatus").textContent = "Profil je uložený.";
       },
       $("#profileStatus"),
     );
@@ -111,7 +126,10 @@ function renderSettings() {
     operation(
       $("#emailSave"),
       async () => {
-        const r = await api("account/email", "POST", { email: $("#newEmail").value.trim(), password: $("#emailPassword").value });
+        const r = await api("account/email", "POST", {
+          email: $("#newEmail").value.trim(),
+          password: $("#emailPassword").value,
+        });
         $("#emailStatus").textContent = r.message;
         $("#emailForm").reset();
       },
@@ -121,7 +139,7 @@ function renderSettings() {
   $("#passwordForm").onsubmit = (e) => {
     e.preventDefault();
     if ($("#newPassword").value !== $("#repeatPassword").value) {
-      $("#passwordStatus").textContent = L("Nové heslá sa nezhodujú.", "Nová hesla se neshodují.");
+      $("#passwordStatus").textContent = "Nové heslá sa nezhodujú.";
       return;
     }
     operation(
@@ -140,7 +158,7 @@ function renderSettings() {
   };
   $("#deleteAccount").onclick = () => {
     openModal(
-      `<form class="dialog-form" id="deleteAccountForm"><h2 id="dialogTitle">${L("Odstrániť účet?", "Odstranit účet?")}</h2><p>${L("Vymažú sa tvoje kontaktné údaje, inzeráty, fotografie, obľúbené a vlastné správy. Rozhovory druhej strany zostanú s anonymným profilom.", "Vymažou se tvoje kontaktní údaje, inzeráty, fotografie, oblíbené a vlastní zprávy. Rozhovory druhé strany zůstanou s anonymním profilem.")}</p><label for="deletePassword">${L("Heslo", "Heslo")}</label><input id="deletePassword" type="password" required autocomplete="current-password" autofocus><p id="deleteError" class="field-error" role="alert"></p><button class="outline delete-action" id="deleteConfirm">${L("Trvalo odstrániť účet", "Trvale odstranit účet")}</button></form>`,
+      `<form class="dialog-form" id="deleteAccountForm"><h2 id="dialogTitle">Odstrániť účet?</h2><p>Vymažú sa tvoje kontaktné údaje, inzeráty, fotografie, obľúbené a vlastné správy. Rozhovory druhej strany zostanú s anonymným profilom.</p><label for="deletePassword">Heslo</label><input id="deletePassword" type="password" required autocomplete="current-password" autofocus><p id="deleteError" class="field-error" role="alert"></p><button class="outline delete-action" id="deleteConfirm">Trvalo odstrániť účet</button></form>`,
     );
     $("#deleteAccountForm").onsubmit = (e) => {
       e.preventDefault();
@@ -150,7 +168,10 @@ function renderSettings() {
           await api("account", "DELETE", { password: $("#deletePassword").value });
           try {
             for (const k of Object.keys(localStorage))
-              if (k.startsWith("bazar-listing-draft:" + state.user.id) || k.startsWith("bazar-message-draft:" + state.user.id + ":"))
+              if (
+                k.startsWith("bazar-listing-draft:" + state.user.id) ||
+                k.startsWith("bazar-message-draft:" + state.user.id + ":")
+              )
                 localStorage.removeItem(k);
           } catch {}
           location.assign("/");
@@ -165,31 +186,41 @@ async function manageListing(action, id) {
   if (!d) return;
   if (action === "edit") return editListing(d);
   if (action === "boost") return boostListing(d);
+  if (action === "renew")
+    return operation(null, async () => {
+      await api("listings/" + id + "/renew", "POST", {});
+      toast("Inzerát je predĺžený o 60 dní.");
+      await renderAccount();
+    });
   const deleting = action === "delete",
     reactivating = d.status === "sold";
   const ok = await confirmDialog({
     title: deleting
-      ? L("Odstrániť inzerát?", "Odstranit inzerát?")
+      ? "Odstrániť inzerát?"
       : reactivating
-        ? L("Znovu zverejniť?", "Znovu zveřejnit?")
+        ? "Znovu zverejniť?"
         : d.buy
-          ? L("Ukončiť dopyt?", "Ukončit poptávku?")
-          : L("Už je predaný?", "Už je prodaný?"),
+          ? "Ukončiť dopyt?"
+          : "Už je predaný?",
     text:
       esc(d.title) +
       "<br>" +
       (deleting
-        ? L("Inzerát aj fotografie sa natrvalo odstránia.", "Inzerát i fotografie se natrvalo odstraní.")
+        ? "Inzerát aj fotografie sa natrvalo odstránia."
         : reactivating
-          ? L("Inzerát sa znovu zobrazí vo vyhľadávaní.", "Inzerát se znovu zobrazí ve vyhledávání.")
-          : L("Zmizne z vyhľadávania, ale zostane v tvojom účte. Neskôr ho môžeš znovu aktivovať.", "Zmizí z vyhledávání, ale zůstane ve tvém účtu. Později ho můžeš znovu aktivovat.")),
-    confirm: deleting ? L("Odstrániť", "Odstranit") : L("Potvrdiť", "Potvrdit"),
+          ? "Inzerát sa znovu zobrazí vo vyhľadávaní."
+          : "Zmizne z vyhľadávania, ale zostane v tvojom účte. Neskôr ho môžeš znovu aktivovať."),
+    confirm: deleting ? "Odstrániť" : "Potvrdiť",
     danger: deleting,
   });
   if (!ok) return;
   await operation(null, async () => {
-    await api("listings/" + id, deleting ? "DELETE" : "PATCH", deleting ? {} : { status: reactivating ? "active" : "sold" });
-    toast(L("Zmena je uložená.", "Změna je uložená."));
+    await api(
+      "listings/" + id,
+      deleting ? "DELETE" : "PATCH",
+      deleting ? {} : { status: reactivating ? "active" : "sold" },
+    );
+    toast("Zmena je uložená.");
     await renderAccount();
   });
 }
@@ -198,15 +229,25 @@ function editListing(d) {
     busy = false;
   const urls = [];
   openModal(
-    `<form class="dialog-form" id="editListingForm"><span class="small-kicker">${L("ÚPRAVA INZERÁTU", "ÚPRAVA INZERÁTU")}</span><h2 id="dialogTitle">${L("Doladiť ponuku.", "Doladit nabídku.")}</h2><label>${L("Názov", "Název")}<input id="editTitle" value="${esc(d.title)}" required minlength="5" maxlength="140"></label><label>Popis<textarea id="editDescription" required minlength="15" maxlength="10000" rows="6">${esc(d.desc)}</textarea></label><div class="form-row"><label>${L("Typ inzerátu", "Typ inzerátu")}<select id="editType"><option value="sell"${!d.buy ? " selected" : ""}>${L("Predám", "Prodám")}</option><option value="buy"${d.buy ? " selected" : ""}>${L("Kúpim", "Koupím")}</option></select></label><label>${L("Stav predmetu", "Stav předmětu")}<select id="editCondition"><option value="Používané"${d.state === "Používané" ? " selected" : ""}>${L("Používané", "Použité")}</option><option value="Nové"${d.state === "Nové" ? " selected" : ""}>${L("Nové", "Nové")}</option></select></label></div><div class="form-row"><label>${L("Cena", "Cena")} (${d.country === "cz" ? "Kč" : "€"})<input id="editPrice" type="number" min="0" max="100000000" step="any" required value="${d.price}"></label><label>${L("Kategória", "Kategorie")}<select id="editCategory">${CATEGORIES.map((c) => `<option value="${esc(c[0])}"${d.cat === c[0] ? " selected" : ""}>${esc(catName(c[0]))}</option>`).join("")}</select></label></div><div class="form-row"><label>${L("Mesto", "Město")}<input id="editCity" required minlength="2" maxlength="100" value="${esc(d.city)}" list="editCities"><datalist id="editCities"></datalist></label><label>${L("Telefón (nepovinné)", "Telefon (nepovinné)")}<input id="editPhone" type="tel" maxlength="30" value="${esc(d.phone || "")}"></label></div><fieldset class="edit-photo-field"><legend>${L("Fotografie", "Fotografie")}</legend><p class="field-hint">${L("Najviac 8 fotografií. Prvá je titulná. Zmeny sa použijú až po uložení.", "Nejvýše 8 fotografií. První je titulní. Změny se použijí až po uložení.")}</p><div id="editPhotoGrid" class="edit-photo-grid"></div><label class="outline edit-photo-add">＋ ${L("Pridať fotografie", "Přidat fotografie")}<input id="editPhotos" type="file" accept="image/jpeg,image/png,image/webp" multiple></label></fieldset><p id="editStatus" class="field-error" role="alert"></p><div class="edit-form-actions"><button class="outline" type="button" id="editCancel">${L("Zrušiť", "Zrušit")}</button><button class="primary" id="editSubmit">${L("Uložiť zmeny", "Uložit změny")}</button></div></form>`,
+    `<form class="dialog-form" id="editListingForm"><span class="kicker">Úprava inzerátu</span><h2 id="dialogTitle">Doladiť ponuku</h2><label>Názov<input id="editTitle" value="${esc(d.title)}" required minlength="5" maxlength="140"></label><label>Popis<textarea id="editDescription" required minlength="15" maxlength="10000" rows="6">${esc(d.desc)}</textarea></label><div class="form-row"><label>Typ inzerátu<select id="editType"><option value="sell"${!d.buy ? " selected" : ""}>Predám</option><option value="buy"${d.buy ? " selected" : ""}>Kúpim</option></select></label><label>Stav<select id="editCondition"><option value="Používané"${d.state === "Používané" ? " selected" : ""}>Používané</option><option value="Nové"${d.state === "Nové" ? " selected" : ""}>Nové</option></select></label></div><div class="form-row"><label>Kategória<select id="editCategory">${CATALOG.map((c) => `<option value="${c.slug}"${d.cat === c.slug ? " selected" : ""}>${esc(c.name)}</option>`).join("")}</select></label><label>Podkategória<select id="editSub"></select></label></div><div class="form-row"><label>Cena<select id="editPriceType"><option value="fixed"${d.priceType === "fixed" ? " selected" : ""}>Pevná cena</option><option value="free"${d.priceType === "free" ? " selected" : ""}>Zadarmo</option><option value="negotiable"${d.priceType === "negotiable" ? " selected" : ""}>Dohodou</option><option value="text"${d.priceType === "text" ? " selected" : ""}>V texte</option></select></label><label>Suma (€)<input id="editPrice" type="number" min="0" max="100000000" step="any" value="${d.priceType === "fixed" ? d.price : ""}"></label></div><div class="form-row"><label>PSČ<input id="editZip" required inputmode="numeric" maxlength="6" value="${esc(formatZip(d.zip))}"></label><label>Obec<input id="editCity" required minlength="2" maxlength="100" value="${esc(d.city)}" list="placeList"></label></div><label>Telefón (nepovinné)<input id="editPhone" type="tel" maxlength="30" value="${esc(d.phone || "")}"></label><fieldset class="edit-photo-field"><legend>Fotografie</legend><p class="field-hint">Najviac 8 fotografií. Prvá je titulná. Zmeny sa použijú až po uložení.</p><div id="editPhotoGrid" class="edit-photo-grid"></div><label class="outline edit-photo-add">＋ Pridať fotografie<input id="editPhotos" type="file" accept="image/jpeg,image/png,image/webp" multiple></label></fieldset><p id="editStatus" class="field-error" role="alert"></p><div class="edit-form-actions"><button class="outline" type="button" id="editCancel">Zrušiť</button><button class="primary" id="editSubmit">Uložiť zmeny</button></div></form>`,
   );
-  if (lang === d.country) fillCityList($("#editCities"));
+  const fillSubs = () => {
+    const c = category($("#editCategory").value);
+    $("#editSub").innerHTML = (c?.subs || [])
+      .map((x) => `<option value="${x.slug}"${x.slug === d.sub ? " selected" : ""}>${esc(x.name)}</option>`)
+      .join("");
+  };
+  fillSubs();
+  $("#editCategory").onchange = fillSubs;
+  const syncPrice = () => ($("#editPrice").closest("label").hidden = $("#editPriceType").value !== "fixed");
+  syncPrice();
+  $("#editPriceType").onchange = syncPrice;
   function drawPhotos() {
     const host = $("#editPhotoGrid");
     host.innerHTML = photos
       .map(
         (p, i) =>
-          `<div class="edit-photo"><img src="${esc(p.src)}" alt="${L("Fotografia", "Fotografie")} ${i + 1}">${i === 0 ? `<span class="edit-photo-cover">${L("Titulná", "Titulní")}</span>` : ""}<div><button type="button" data-photo-up="${i}" ${i === 0 ? "disabled" : ""} aria-label="${L("Posunúť dopredu", "Posunout dopředu")}">←</button><button type="button" data-photo-down="${i}" ${i === photos.length - 1 ? "disabled" : ""} aria-label="${L("Posunúť dozadu", "Posunout dozadu")}">→</button><button type="button" data-photo-remove="${i}" class="delete-action" aria-label="${L("Odstrániť fotografiu", "Odstranit fotografii")}">×</button></div></div>`,
+          `<div class="edit-photo"><img src="${esc(p.src)}" alt="Fotografia ${i + 1}">${i === 0 ? `<span class="edit-photo-cover">Titulná</span>` : ""}<div><button type="button" data-photo-up="${i}" ${i === 0 ? "disabled" : ""} aria-label="Posunúť dopredu">←</button><button type="button" data-photo-down="${i}" ${i === photos.length - 1 ? "disabled" : ""} aria-label="Posunúť dozadu">→</button><button type="button" data-photo-remove="${i}" class="delete-action" aria-label="Odstrániť fotografiu">×</button></div></div>`,
       )
       .join("");
     host.onclick = (e) => {
@@ -239,7 +280,7 @@ function editListing(d) {
     if (busy) return;
     const files = [...(e.target.files || [])];
     e.target.value = "";
-    if (photos.length + files.length > 8) return ($("#editStatus").textContent = L("Najviac 8 fotografií.", "Nejvýše 8 fotografií."));
+    if (photos.length + files.length > 8) return ($("#editStatus").textContent = "Najviac 8 fotografií.");
     $("#editStatus").textContent = "";
     try {
       for (const file of files) {
@@ -258,21 +299,28 @@ function editListing(d) {
     operation(
       $("#editSubmit"),
       async () => {
-        if ($("#editType").value === "sell" && !photos.length)
-          throw Error(L("Pridaj aspoň jednu fotografiu.", "Přidej alespoň jednu fotografii."));
+        if ($("#editType").value === "sell" && !photos.length) throw Error("Pridaj aspoň jednu fotografiu.");
         busy = true;
         $("#editCancel").disabled = true;
         try {
           const ids = [];
           for (const p of photos) {
-            if (!p.id) p.id = (await api("uploads", "POST", p.blob)).id;
+            if (!p.id) p.id = await uploadPhoto(p.blob);
             ids.push(p.id);
           }
           await api("listings/" + d.id, "PATCH", {
             title: $("#editTitle").value,
             desc: $("#editDescription").value,
-            price: $("#editPrice").value === "" ? null : Number($("#editPrice").value),
+            priceType: $("#editPriceType").value,
+            price:
+              $("#editPriceType").value === "fixed"
+                ? $("#editPrice").value === ""
+                  ? null
+                  : Number($("#editPrice").value)
+                : 0,
             cat: $("#editCategory").value,
+            sub: $("#editSub").value,
+            zip: $("#editZip").value,
             state: $("#editCondition").value,
             buy: $("#editType").value === "buy",
             city: $("#editCity").value,
@@ -281,7 +329,7 @@ function editListing(d) {
           });
           busy = false;
           closeModal();
-          toast(L("Inzerát je upravený.", "Inzerát je upravený."));
+          toast("Inzerát je upravený.");
           await renderAccount();
         } finally {
           busy = false;
@@ -297,7 +345,7 @@ function editListing(d) {
 }
 function boostListing(d) {
   openModal(
-    `<form class="dialog-form" id="boostForm"><span class="small-kicker">↑ BOOST</span><h2 id="dialogTitle">${L("Daj ponuke náskok.", "Dej nabídce náskok.")}</h2><p>${esc(d.title)}</p><p class="modal-muted">${L("Zvýraznený inzerát je vyššie vo výsledkoch a môže sa zobraziť vo výbere na úvodnej stránke.", "Zvýrazněný inzerát je výše ve výsledcích a může se zobrazit ve výběru na úvodní stránce.")}</p>${d.boost ? `<div class="notice">${L("Aktívny do", "Aktivní do")} ${fmtDate(d.boostUntil)}</div>` : ""}<label for="boostDuration">${L("Dĺžka zvýraznenia", "Délka zvýraznění")}</label><select id="boostDuration"><option value="3">3 ${L("dni", "dny")}</option><option value="7" selected>7 ${L("dní", "dní")}</option><option value="14">14 ${L("dní", "dní")}</option></select><div class="notice">${L("Zvýraznenie je momentálne bezplatné.", "Zvýraznění je momentálně zdarma.")}</div><p id="boostError" class="field-error" role="alert"></p><button class="primary" id="boostSubmit">${d.boost ? L("Predĺžiť Boost", "Prodloužit Boost") : L("Aktivovať Boost", "Aktivovat Boost")}</button>${d.boost ? `<button type="button" class="outline" id="boostOff">${L("Vypnúť Boost", "Vypnout Boost")}</button>` : ""}</form>`,
+    `<form class="dialog-form" id="boostForm"><span class="small-kicker">↑ BOOST</span><h2 id="dialogTitle">Daj ponuke náskok.</h2><p>${esc(d.title)}</p><p class="modal-muted">Zvýraznený inzerát je vyššie vo výsledkoch a môže sa zobraziť vo výbere na úvodnej stránke.</p>${d.boost ? `<div class="notice">Aktívny do ${fmtDate(d.boostUntil)}</div>` : ""}<label for="boostDuration">Dĺžka zvýraznenia</label><select id="boostDuration"><option value="3">3 dni</option><option value="7" selected>7 dní</option><option value="14">14 dní</option></select><div class="notice">Zvýraznenie je momentálne bezplatné.</div><p id="boostError" class="field-error" role="alert"></p><button class="primary" id="boostSubmit">${d.boost ? "Predĺžiť Boost" : "Aktivovať Boost"}</button>${d.boost ? `<button type="button" class="outline" id="boostOff">Vypnúť Boost</button>` : ""}</form>`,
   );
   const send = (body, button) =>
     operation(
@@ -305,7 +353,7 @@ function boostListing(d) {
       async () => {
         await api("listings/" + d.id + "/boost", "POST", body);
         closeModal();
-        toast(body.off ? L("Boost je vypnutý.", "Boost je vypnutý.") : L("Boost je aktívny.", "Boost je aktivní."));
+        toast(body.off ? "Boost je vypnutý." : "Boost je aktívny.");
         await renderAccount();
       },
       $("#boostError"),
@@ -323,13 +371,15 @@ async function renderAccount() {
     else renderSettings();
     $("#accountLogout").onclick = () => operation($("#accountLogout"), logout);
   } catch (e) {
-    $("#accountContent").innerHTML = `<div class="empty"><h2>${L("Účet sa nepodarilo načítať.", "Účet se nepodařilo načíst.")}</h2><p>${esc(e.message)}</p><button type="button" class="primary" id="accountRetry">${L("Skúsiť znova", "Zkusit znovu")}</button></div>`;
+    $("#accountContent").innerHTML =
+      `<div class="empty"><h2>Účet sa nepodarilo načítať.</h2><p>${esc(e.message)}</p><button type="button" class="primary" id="accountRetry">Skúsiť znova</button></div>`;
     $("#accountRetry").onclick = () => location.reload();
   }
 }
 window.pageInit = async function () {
   if (!state.user) {
-    $("#accountContent").innerHTML = `<div class="account-guest"><span class="small-kicker">${L("TVOJ PRIESTOR", "TVŮJ PROSTOR")}</span><h1>${L("Všetko tvoje.<br>Na jednom mieste.", "Všechno tvoje.<br>Na jednom místě.")}</h1><p>${L("Spravuj inzeráty, ulož si dobré nálezy a maj pod kontrolou svoje kontakty.", "Spravuj inzeráty, ulož si dobré nálezy a měj pod kontrolou své kontakty.")}</p><a class="primary" href="${loginUrl()}">${L("Prihlásiť sa", "Přihlásit se")} ↗</a> <a class="outline" href="/registracia/">${L("Vytvoriť účet", "Vytvořit účet")}</a></div>`;
+    $("#accountContent").innerHTML =
+      `<div class="account-guest"><span class="small-kicker">TVOJ PRIESTOR</span><h1>Všetko tvoje.<br>Na jednom mieste.</h1><p>Spravuj inzeráty, ulož si dobré nálezy a maj pod kontrolou svoje kontakty.</p><a class="primary" href="${loginUrl()}">Prihlásiť sa ↗</a> <a class="outline" href="/registracia/">Vytvoriť účet</a></div>`;
     return;
   }
   await renderAccount();
